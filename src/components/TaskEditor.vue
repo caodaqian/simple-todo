@@ -3,9 +3,11 @@
 import { renderMarkdown } from '../services/markdownService';
 import { notify } from '../services/notifyService';
 import { taskService } from '../services/taskService';
-import type { SaveTaskInput, Subtask, Task, TaskPriority, TaskStatus } from '../types/task';
+import type { RepeatRule, SaveTaskInput, Subtask, Task, TaskPriority, TaskStatus } from '../types/task';
 import { getTaskEnd, getTaskStart } from '../types/task';
 import AppIcon from './AppIcon.vue';
+
+  type RepeatFormType = '' | RepeatRule['type'];
 
   interface TaskEditorForm {
     title: string;
@@ -22,6 +24,10 @@ import AppIcon from './AppIcon.vue';
     endDate: string;
     endTime: string;
     description: string;
+    reminderOffset: number | null;
+    repeatType: RepeatFormType;
+    repeatInterval: number;
+    repeatUntilDate: string;
   }
 
   const props = defineProps<{
@@ -81,6 +87,10 @@ import AppIcon from './AppIcon.vue';
       endDate: '',
       endTime: '10:00',
       description: '',
+      reminderOffset: null,
+      repeatType: '',
+      repeatInterval: 1,
+      repeatUntilDate: '',
     };
   }
 
@@ -169,6 +179,11 @@ import AppIcon from './AppIcon.vue';
       return new Date(parts[0]!, parts[1]! - 1, parts[2]!, t[0] ?? 0, t[1] ?? 0).getTime();
     }
     return new Date(parts[0]!, parts[1]! - 1, parts[2]!, 0, 0, 0, 0).getTime();
+  };
+
+  const handleReminderOffsetChange = (event: Event): void => {
+    const value = (event.target as HTMLSelectElement).value;
+    form.value.reminderOffset = value === '' ? null : Number(value);
   };
 
   // 截止时间摘要展示在 hero
@@ -397,6 +412,7 @@ import AppIcon from './AppIcon.vue';
       const hasDue = start !== undefined;
       const allDay = task.allDay === true;
       const hasEnd = end !== undefined && end !== start;
+      const repeat = task.repeat;
       form.value = {
         title: task.title,
         status: task.status,
@@ -411,6 +427,10 @@ import AppIcon from './AppIcon.vue';
         endDate: hasEnd && end !== undefined ? formatDateInput(end) : '',
         endTime: hasEnd && end !== undefined ? formatTimeInput(end) : '10:00',
         description: task.description,
+        reminderOffset: task.reminderOffset !== undefined ? task.reminderOffset : null,
+        repeatType: repeat ? repeat.type : '',
+        repeatInterval: repeat ? repeat.interval : 1,
+        repeatUntilDate: repeat?.repeatUntil ? formatDateInput(repeat.repeatUntil) : '',
       };
       subtasks.value = task.subtasks.map((item) => ({ ...item }));
     } else {
@@ -457,6 +477,10 @@ import AppIcon from './AppIcon.vue';
       endDate: f.endDate,
       endTime: f.endTime,
       description: f.description,
+      reminderOffset: f.reminderOffset,
+      repeatType: f.repeatType,
+      repeatInterval: f.repeatInterval,
+      repeatUntilDate: f.repeatUntilDate,
       subtasks: subtasks.value.map((s) => ({ c: s.completed, t: s.title })),
     });
   }
@@ -576,6 +600,18 @@ import AppIcon from './AppIcon.vue';
       }
     }
 
+    let repeatRule: RepeatRule | undefined;
+    if (f.repeatType) {
+      repeatRule = {
+        type: f.repeatType,
+        interval: f.repeatInterval > 0 ? f.repeatInterval : 1,
+      };
+      if (f.repeatUntilDate) {
+        const repeatUntil = dateInputToTimestamp(f.repeatUntilDate);
+        if (!Number.isNaN(repeatUntil)) repeatRule.repeatUntil = repeatUntil;
+      }
+    }
+
     const payload: SaveTaskInput = {
       title,
       status: f.status,
@@ -588,6 +624,16 @@ import AppIcon from './AppIcon.vue';
       dueEnd,
       allDay: allDayFlag,
     };
+    if (f.reminderOffset !== null && f.reminderOffset >= 0) {
+      payload.reminderOffset = f.reminderOffset;
+    } else if (task?.reminderOffset !== undefined) {
+      Object.assign(payload, { reminderOffset: undefined });
+    }
+    if (repeatRule) {
+      payload.repeat = repeatRule;
+    } else if (task?.repeat !== undefined) {
+      Object.assign(payload, { repeat: undefined });
+    }
     if (task) {
       payload.id = task.id;
       payload.createdAt = task.createdAt;
@@ -935,6 +981,81 @@ import AppIcon from './AppIcon.vue';
                   <span>时间段</span>
                 </label>
               </div>
+            </section>
+
+            <section class="side-card reminder-card">
+              <div class="section-heading compact">
+                <div>
+                  <p class="section-kicker">提醒</p>
+                  <h3>提前提醒</h3>
+                </div>
+              </div>
+
+              <label class="field-block">
+                <span class="field-label">提前时间</span>
+                <div class="reminder-select-row">
+                  <select
+                    :value="form.reminderOffset ?? ''"
+                    class="reminder-select"
+                    @change="handleReminderOffsetChange"
+                  >
+                    <option value="">不提醒</option>
+                    <option value="0">准时</option>
+                    <option value="5">提前 5 分钟</option>
+                    <option value="15">提前 15 分钟</option>
+                    <option value="30">提前 30 分钟</option>
+                    <option value="60">提前 1 小时</option>
+                    <option value="120">提前 2 小时</option>
+                    <option value="1440">提前 1 天</option>
+                  </select>
+                </div>
+                <p v-if="!form.hasDue" class="field-hint">需先设置截止时间</p>
+              </label>
+            </section>
+
+            <section class="side-card repeat-card">
+              <div class="section-heading compact">
+                <div>
+                  <p class="section-kicker">重复</p>
+                  <h3>重复规则</h3>
+                </div>
+              </div>
+
+              <label class="field-block">
+                <span class="field-label">重复方式</span>
+                <select v-model="form.repeatType" class="repeat-type-select">
+                  <option value="">不重复</option>
+                  <option value="daily">每天</option>
+                  <option value="weekly">每周</option>
+                  <option value="monthly">每月</option>
+                  <option value="custom">自定义间隔</option>
+                </select>
+              </label>
+
+              <template v-if="form.repeatType">
+                <label v-if="form.repeatType === 'custom'" class="field-block">
+                  <span class="field-label">间隔天数</span>
+                  <input
+                    v-model.number="form.repeatInterval"
+                    type="number"
+                    min="1"
+                    max="365"
+                    class="interval-input"
+                    placeholder="1"
+                  />
+                </label>
+
+                <label class="field-block">
+                  <span class="field-label">结束日期 <span class="field-hint-inline">（选填）</span></span>
+                  <input
+                    v-model="form.repeatUntilDate"
+                    type="date"
+                    class="repeat-date-input"
+                    aria-label="重复结束日期"
+                  />
+                </label>
+                <p class="field-hint repeat-hint">完成任务后自动生成下一个实例</p>
+              </template>
             </section>
           </aside>
         </div>
@@ -1649,6 +1770,55 @@ import AppIcon from './AppIcon.vue';
 
   .summary-card {
     gap: var(--space-4);
+  }
+
+  /* ── 提醒 & 重复 cards ─────────────────────────────── */
+  .reminder-select-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .reminder-select,
+  .repeat-type-select,
+  .repeat-date-input,
+  .interval-input {
+    width: 100%;
+    padding: var(--space-1) var(--space-2);
+    min-height: 34px;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-input);
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+  }
+
+  .interval-input {
+    max-width: 80px;
+  }
+
+  .repeat-date-input {
+    color-scheme: light dark;
+  }
+
+  [data-theme="mocha"] .repeat-date-input { color-scheme: dark; }
+  [data-theme="latte"] .repeat-date-input,
+  :root .repeat-date-input { color-scheme: light; }
+
+  .field-hint {
+    margin: var(--space-1) 0 0;
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+
+  .field-hint-inline {
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    font-weight: normal;
+  }
+
+  .repeat-hint {
+    margin-top: var(--space-1);
   }
 
   .task-editor-footer {
