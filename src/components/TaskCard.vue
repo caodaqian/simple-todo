@@ -451,6 +451,10 @@ import AppIcon from './AppIcon.vue';
     background: var(--color-priority-low);
   }
 
+  .task-card--panel .task-card__stripe.urgent {
+    background: var(--color-priority-urgent);
+  }
+
   .task-card--panel .task-card__content {
     flex: 1;
     min-width: 0;
