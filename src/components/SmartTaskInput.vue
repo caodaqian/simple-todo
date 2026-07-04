@@ -14,6 +14,7 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 
 	/* ── Parser ───────────────────────────────────────────────────── */
 	const PRIORITY_MAP: Record<string, TaskPriority> = {
+		urgent: 'urgent', u: 'urgent', '紧急': 'urgent',
 		high: 'high', h: 'high', '高': 'high',
 		medium: 'medium', m: 'medium', '中': 'medium',
 		low: 'low', l: 'low', '低': 'low',
@@ -74,11 +75,11 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 	const parsed = computed<ParsedResult>(() => parseInput(rawInput.value));
 
 	const priorityLabel = (p: TaskPriority): string => {
-		return p === 'high' ? '高' : p === 'medium' ? '中' : '低';
+		return p === 'urgent' ? '紧急' : p === 'high' ? '高' : p === 'medium' ? '中' : '低';
 	};
 
 	const priorityClass = (p: TaskPriority): string => {
-		return p === 'high' ? 'priority-high' : p === 'medium' ? 'priority-medium' : 'priority-low';
+		return p === 'urgent' ? 'priority-urgent' : p === 'high' ? 'priority-high' : p === 'medium' ? 'priority-medium' : 'priority-low';
 	};
 
 	/* ── Suggestions ──────────────────────────────────────────────── */
@@ -195,6 +196,7 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 		let items: Suggestion[] = [];
 		if (prefix === '!') {
 			items = [
+				{ type: 'priority', value: '紧急', label: '紧急优先级', prefix: '!' },
 				{ type: 'priority', value: '高', label: '高优先级', prefix: '!' },
 				{ type: 'priority', value: '中', label: '中优先级', prefix: '!' },
 				{ type: 'priority', value: '低', label: '低优先级', prefix: '!' },
@@ -393,6 +395,12 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 		font-weight: 600;
 		line-height: 1;
 		border: 1px solid transparent;
+	}
+
+	.inline-chip.priority-urgent {
+		background: color-mix(in srgb, var(--color-priority-urgent) 18%, transparent);
+		color: var(--color-priority-urgent);
+		border-color: color-mix(in srgb, var(--color-priority-urgent) 35%, transparent);
 	}
 
 	.inline-chip.priority-high {

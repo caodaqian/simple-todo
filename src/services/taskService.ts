@@ -115,7 +115,7 @@ const toTask = (value: unknown): Task | null => {
 	if (dueStart !== undefined && !isTimestamp(dueStart)) return null;
 	if (dueEnd !== undefined && !isTimestamp(dueEnd)) return null;
 	if (allDay !== undefined && typeof allDay !== 'boolean') return null;
-	if (priority !== 'low' && priority !== 'medium' && priority !== 'high') return null;
+	if (priority !== 'low' && priority !== 'medium' && priority !== 'high' && priority !== 'urgent') return null;
 	if (!Array.isArray(tags)) return null;
 	if (typeof group !== 'string') return null;
 	if (typeof description !== 'string') return null;

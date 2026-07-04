@@ -71,6 +71,22 @@ describe('taskService', () => {
 		expect(imported).toEqual(source);
 	});
 
+	it('keeps urgent priority tasks when reading persisted storage', () => {
+		const urgent = createTaskFixture({ id: 'urgent-read', priority: 'urgent' });
+		taskService.replaceAll([urgent]);
+
+		expect(taskService.getAll()).toEqual([urgent]);
+	});
+
+	it('imports urgent priority tasks as valid tasks', () => {
+		const urgent = createTaskFixture({ id: 'urgent-import', priority: 'urgent' });
+
+		const result = taskService.importTasks(JSON.stringify([urgent]));
+
+		expect(result).toEqual({ importedCount: 1, duplicateCount: 0, invalidCount: 0 });
+		expect(taskService.getById(urgent.id)).toEqual(urgent);
+	});
+
 	it('skips duplicate ids during import and keeps existing task', () => {
 		const existing = createTaskFixture({ title: '原任务' });
 		const incoming = createTaskFixture({ title: '新任务' });

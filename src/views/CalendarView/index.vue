@@ -348,6 +348,10 @@ import { getTaskStart } from '../../types/task';
     border-radius: var(--radius-full);
   }
 
+  .day-dot.urgent {
+    background: var(--color-priority-urgent);
+  }
+
   .day-dot.high {
     background: var(--color-priority-high);
   }
