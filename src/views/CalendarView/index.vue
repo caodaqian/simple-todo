@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, onMounted, ref, watch } from 'vue';
+  import { computed, onMounted, ref } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
 import SmartTaskInput from '../../components/SmartTaskInput.vue';
 import TaskCard from '../../components/TaskCard.vue';
@@ -11,6 +11,7 @@ import type { CreateTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../
 import { getTaskStart } from '../../types/task';
 
   const props = defineProps<{
+    tasks: Task[];
     filter?: TaskSearchFilter;
   }>();
 
@@ -18,7 +19,6 @@ import { getTaskStart } from '../../types/task';
 
   interface CalendarCell { key: string; day: number; inCurrentMonth: boolean; isToday: boolean; }
 
-  const tasks = ref<Task[]>([]);
   const currentMonth = ref(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const selectedDateKey = ref<string>('');
   const editorVisible = ref(false);
@@ -35,10 +35,8 @@ import { getTaskStart } from '../../types/task';
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
-  const reloadTasks = (): void => { tasks.value = taskService.getAll(); };
-
   const filteredTasks = computed(() =>
-    searchAndSortTasks(tasks.value, { ...props.filter }, { field: 'dueDate', order: 'asc' }),
+    searchAndSortTasks(props.tasks, { ...props.filter }, { field: 'dueDate', order: 'asc' }),
   );
 
   const tasksByDate = computed(() => {
@@ -91,7 +89,6 @@ import { getTaskStart } from '../../types/task';
 
   const handleStatusChange = (taskId: string, status: TaskStatus): void => {
     taskService.changeStatus(taskId, status);
-    reloadTasks();
     emit('refresh');
   };
 
@@ -101,14 +98,12 @@ import { getTaskStart } from '../../types/task';
 
   const handleQuickCreate = (payload: CreateTaskInput): void => {
     taskService.create(payload);
-    reloadTasks();
     emit('refresh');
   };
   const handleOpenEdit = (task: Task): void => { editingTask.value = task; editorVisible.value = true; };
-  const handleSaved = (): void => { reloadTasks(); emit('refresh'); };
+  const handleSaved = (): void => { emit('refresh'); };
 
-  watch(() => props.filter, () => reloadTasks(), { deep: true });
-  onMounted(() => { reloadTasks(); goToday(); });
+  onMounted(() => { goToday(); });
 </script>
 
 <template>
