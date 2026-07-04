@@ -1,0 +1,5 @@
+/* 简悦清单 — 全局样式入口
+   仅做 @import 顺序导入，具体内容拆分到 styles/ 下。 */
+@import './styles/tokens.css';
+@import './styles/theme.css';
+@import './styles/base.css';

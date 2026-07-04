@@ -1,0 +1,1545 @@
+{
+  "main": "index.html",
+  "preload": "preload/services.js",
+  "logo": "logo.png",
+  "development": {
+    "main": "http://localhost:5173"
+  },
+  "features": [
+    {
+      "code": "todo",
+      "explain": "任务管理中心（列表/看板/四象限/日历）",
+      "cmds": [
+        "todo",
+        "待办",
+        "任务",
+        "清单"
+      ]
+    }
+  ],
+  "tools": {
+    "todo_create_task": {
+      "description": "创建一个新任务",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "任务标题"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "description": "优先级：low=低，medium=中，high=高"
+          },
+          "due_date": {
+            "type": "string",
+            "description": "截止时间，ISO 8601 格式如 2026-06-10T18:00:00+08:00"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "标签列表"
+          },
+          "group": {
+            "type": "string",
+            "description": "分组/项目名称"
+          },
+          "description": {
+            "type": "string",
+            "description": "任务描述（Markdown 格式）"
+          },
+          "reminder_offset": {
+            "type": "number",
+            "description": "提前 due_date 多少分钟提醒（0=到期时提醒，需先有 due_date）"
+          },
+          "repeat": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "daily",
+                  "weekly",
+                  "monthly",
+                  "custom"
+                ],
+                "description": "重复类型：daily=每 N 天，weekly=每 N 周，monthly=每 N 月，custom=每 N 天"
+              },
+              "interval": {
+                "type": "number",
+                "description": "间隔数（必须为正数）"
+              },
+              "repeat_until": {
+                "type": "string",
+                "description": "重复截止时间 ISO 8601（可选，到此时间后停止生成）"
+              },
+              "repeat_count": {
+                "type": "number",
+                "description": "最多生成实例数（可选，不含原始任务）"
+              }
+            },
+            "required": [
+              "type",
+              "interval"
+            ],
+            "description": "重复规则，任务标记完成后自动生成下一实例"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "任务ID"
+          },
+          "title": {
+            "type": "string",
+            "description": "任务标题"
+          },
+          "status": {
+            "type": "string",
+            "description": "任务状态"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status"
+        ]
+      }
+    },
+    "todo_list_tasks": {
+      "description": "列出任务，支持按状态、优先级、标签筛选",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "todo",
+              "doing",
+              "done"
+            ],
+            "description": "按状态筛选"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "description": "按优先级筛选"
+          },
+          "tag": {
+            "type": "string",
+            "description": "按标签筛选"
+          },
+          "keyword": {
+            "type": "string",
+            "description": "按关键词搜索标题或描述"
+          },
+          "limit": {
+            "type": "number",
+            "description": "返回数量限制，默认20"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "priority": {
+                  "type": "string"
+                },
+                "due_date": {
+                  "type": "string"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "tasks",
+          "total"
+        ]
+      }
+    },
+    "todo_complete_task": {
+      "description": "将任务标记为已完成",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "任务ID"
+          }
+        },
+        "required": [
+          "task_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status"
+        ]
+      }
+    },
+    "todo_update_task": {
+      "description": "更新任务属性（标题、优先级、截止时间、状态等）",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "任务ID"
+          },
+          "title": {
+            "type": "string",
+            "description": "新标题"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "todo",
+              "doing",
+              "done"
+            ],
+            "description": "新状态"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "description": "新优先级"
+          },
+          "due_date": {
+            "type": "string",
+            "description": "新截止时间，ISO 8601 格式"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "新标签列表（覆盖）"
+          },
+          "description": {
+            "type": "string",
+            "description": "新描述（Markdown）"
+          },
+          "reminder_offset": {
+            "type": "number",
+            "description": "提前 due_date 多少分钟提醒；传 null/省略则清除提醒"
+          },
+          "repeat": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "daily",
+                  "weekly",
+                  "monthly",
+                  "custom"
+                ],
+                "description": "重复类型：daily=每 N 天，weekly=每 N 周，monthly=每 N 月，custom=每 N 天"
+              },
+              "interval": {
+                "type": "number",
+                "description": "间隔数（必须为正数）"
+              },
+              "repeat_until": {
+                "type": "string",
+                "description": "重复截止时间 ISO 8601（可选，到此时间后停止生成）"
+              },
+              "repeat_count": {
+                "type": "number",
+                "description": "最多生成实例数（可选，不含原始任务）"
+              }
+            },
+            "required": [
+              "type",
+              "interval"
+            ],
+            "description": "重复规则（覆盖）；传 null/省略则清除重复"
+          }
+        },
+        "required": [
+          "task_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status"
+        ]
+      }
+    },
+    "todo_delete_task": {
+      "description": "删除一个任务",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "任务ID"
+          }
+        },
+        "required": [
+          "task_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ]
+      }
+    },
+    "todo_add_subtask": {
+      "description": "为指定任务追加一个子任务",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "所属任务ID"
+          },
+          "title": {
+            "type": "string",
+            "description": "子任务标题"
+          }
+        },
+        "required": [
+          "task_id",
+          "title"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "subtask_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "completed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task_id",
+          "subtask_id",
+          "title",
+          "completed"
+        ]
+      }
+    },
+    "todo_update_subtask": {
+      "description": "更新子任务的完成状态或标题（至少提供 completed 或 title 之一）",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "所属任务ID"
+          },
+          "subtask_id": {
+            "type": "string",
+            "description": "子任务ID"
+          },
+          "completed": {
+            "type": "boolean",
+            "description": "是否完成"
+          },
+          "title": {
+            "type": "string",
+            "description": "新标题"
+          }
+        },
+        "required": [
+          "task_id",
+          "subtask_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "subtask_id": {
+            "type": "string"
+          },
+          "completed": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "subtask_id",
+          "completed",
+          "title"
+        ]
+      }
+    },
+    "todo_delete_subtask": {
+      "description": "删除指定子任务",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "所属任务ID"
+          },
+          "subtask_id": {
+            "type": "string",
+            "description": "子任务ID"
+          }
+        },
+        "required": [
+          "task_id",
+          "subtask_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ]
+      }
+    },
+    "todo_search_tasks": {
+      "description": "高级搜索任务：支持状态/优先级数组、标签 any/all 匹配、分组、截止日期范围、关键词、是否含已完成、排序与分页",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "keyword": {
+            "type": "string",
+            "description": "按关键词模糊匹配标题或描述"
+          },
+          "status": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "todo",
+                "doing",
+                "done"
+              ]
+            },
+            "description": "按状态筛选，可传单值或数组（如 [\"todo\"] 或 [\"todo\",\"doing\"]）"
+          },
+          "priority": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "description": "按优先级筛选，可传单值或数组"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "按标签筛选"
+          },
+          "tag_match_mode": {
+            "type": "string",
+            "enum": [
+              "any",
+              "all"
+            ],
+            "description": "标签匹配模式：any=任一匹配(默认)，all=全部匹配"
+          },
+          "group": {
+            "type": "string",
+            "description": "按分组精确匹配"
+          },
+          "due_after": {
+            "type": "string",
+            "description": "截止时间下界，ISO 8601 格式"
+          },
+          "due_before": {
+            "type": "string",
+            "description": "截止时间上界，ISO 8601 格式"
+          },
+          "include_no_due": {
+            "type": "boolean",
+            "description": "日期范围筛选时是否包含无截止日期的任务，默认 false"
+          },
+          "show_completed": {
+            "type": "boolean",
+            "description": "是否包含已完成任务，默认 true"
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "priority",
+              "dueDate",
+              "createdAt",
+              "updatedAt"
+            ],
+            "description": "排序字段，默认 createdAt"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "description": "排序方向，默认 desc"
+          },
+          "limit": {
+            "type": "number",
+            "description": "返回数量限制，默认 50"
+          },
+          "offset": {
+            "type": "number",
+            "description": "分页偏移量，默认 0"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "priority": {
+                  "type": "string"
+                },
+                "due_date": {
+                  "type": "string"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "group": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "tasks",
+          "total",
+          "limit",
+          "offset"
+        ]
+      }
+    },
+    "todo_get_overview": {
+      "description": "获取任务统计概览：总数、按状态/优先级分布、逾期、今日到期、无截止日期",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": "只统计指定分组（可选）"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "byStatus": {
+            "type": "object",
+            "properties": {
+              "todo": {
+                "type": "number"
+              },
+              "doing": {
+                "type": "number"
+              },
+              "done": {
+                "type": "number"
+              }
+            }
+          },
+          "byPriority": {
+            "type": "object",
+            "properties": {
+              "low": {
+                "type": "number"
+              },
+              "medium": {
+                "type": "number"
+              },
+              "high": {
+                "type": "number"
+              }
+            }
+          },
+          "overdue": {
+            "type": "number"
+          },
+          "dueToday": {
+            "type": "number"
+          },
+          "noDueDate": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "byStatus",
+          "byPriority",
+          "overdue",
+          "dueToday",
+          "noDueDate"
+        ]
+      }
+    },
+    "todo_list_tags": {
+      "description": "列出所有任务使用过的标签，按使用次数降序返回",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "tags"
+        ]
+      }
+    },
+    "todo_list_groups": {
+      "description": "列出所有任务分组（非空），按任务数降序返回",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "groups"
+        ]
+      }
+    },
+    "todo_get_task": {
+      "description": "按 ID 获取单个任务的完整详情（含描述、子任务列表、时间戳）",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "任务ID"
+          }
+        },
+        "required": [
+          "task_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "due_date": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "group": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "subtasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "completed": {
+                  "type": "boolean"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "priority",
+          "tags",
+          "group",
+          "description",
+          "subtasks"
+        ]
+      }
+    },
+    "todo_get_settings": {
+      "description": "读取插件设置（外观模式、强调色、是否显示已完成、默认视图、通知开关）",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "appearanceMode": {
+            "type": "string",
+            "enum": [
+              "light",
+              "dark",
+              "system"
+            ]
+          },
+          "accentColor": {
+            "type": "string"
+          },
+          "showCompleted": {
+            "type": "boolean"
+          },
+          "defaultView": {
+            "type": "string",
+            "enum": [
+              "list",
+              "kanban",
+              "eisenhower",
+              "calendar"
+            ]
+          },
+          "notifyEnabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "appearanceMode",
+          "accentColor",
+          "showCompleted",
+          "defaultView",
+          "notifyEnabled"
+        ]
+      }
+    },
+    "todo_render_markdown": {
+      "description": "将 Markdown 文本转换为 HTML（注：HTML 未经 XSS 净化，消费方需自行处理）",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "markdown": {
+            "type": "string",
+            "description": "Markdown 源文本"
+          }
+        },
+        "required": [
+          "markdown"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "html": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "html"
+        ]
+      }
+    },
+    "todo_export_tasks": {
+      "description": "导出全部任务为 JSON 文件到下载目录，返回文件路径与任务数",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "description": "文件名（可选，默认带时间戳）"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "filePath": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "filePath",
+          "count"
+        ]
+      }
+    },
+    "todo_import_tasks": {
+      "description": "从 JSON 文件导入任务，按 ID 去重合并，返回新增数与无效条目数",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "JSON 文件绝对路径"
+          }
+        },
+        "required": [
+          "file_path"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          },
+          "invalid": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "added",
+          "total",
+          "invalid"
+        ]
+      }
+    },
+    "todo_bulk_update": {
+      "description": "批量更新任务的 status/priority/group（单次最多 100 个，至少提供一项更新字段）",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "description": "要更新的任务ID列表"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "todo",
+              "doing",
+              "done"
+            ],
+            "description": "新状态"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "description": "新优先级"
+          },
+          "group": {
+            "type": "string",
+            "description": "新分组"
+          }
+        },
+        "required": [
+          "task_ids"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "updated": {
+            "type": "number"
+          },
+          "not_found": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "updated",
+          "not_found"
+        ]
+      }
+    },
+    "todo_notify": {
+      "description": "触发系统通知（受设置中的 notifyEnabled 开关约束，关闭时返回 notified:false）",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "通知标题"
+          },
+          "body": {
+            "type": "string",
+            "description": "通知正文（可选）"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "notified": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "description": "未通知时的原因"
+          }
+        },
+        "required": [
+          "notified"
+        ]
+      }
+    },
+    "todo_create_template": {
+      "description": "创建一个任务模板，用于快速创建预设任务",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "模板名称"
+          },
+          "title": {
+            "type": "string",
+            "description": "预设任务标题"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "description": "预设优先级，默认 medium"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "预设标签"
+          },
+          "group": {
+            "type": "string",
+            "description": "预设分组"
+          },
+          "description": {
+            "type": "string",
+            "description": "预设描述（Markdown）"
+          },
+          "subtasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "completed": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "title"
+              ]
+            },
+            "description": "预设子任务"
+          },
+          "reminder_offset": {
+            "type": "number",
+            "description": "预设提醒提前分钟数"
+          },
+          "repeat": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "daily",
+                  "weekly",
+                  "monthly",
+                  "custom"
+                ],
+                "description": "重复类型：daily=每 N 天，weekly=每 N 周，monthly=每 N 月，custom=每 N 天"
+              },
+              "interval": {
+                "type": "number",
+                "description": "间隔数（必须为正数）"
+              },
+              "repeat_until": {
+                "type": "string",
+                "description": "重复截止时间 ISO 8601（可选，到此时间后停止生成）"
+              },
+              "repeat_count": {
+                "type": "number",
+                "description": "最多生成实例数（可选，不含原始任务）"
+              }
+            },
+            "required": [
+              "type",
+              "interval"
+            ],
+            "description": "预设重复规则"
+          }
+        },
+        "required": [
+          "name",
+          "title"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "template_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "template_id",
+          "name"
+        ]
+      }
+    },
+    "todo_list_templates": {
+      "description": "列出所有任务模板",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "priority": {
+                  "type": "string"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "group": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "reminder_offset": {
+                  "type": "number"
+                },
+                "repeat": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "daily",
+                        "weekly",
+                        "monthly",
+                        "custom"
+                      ]
+                    },
+                    "interval": {
+                      "type": "number"
+                    },
+                    "repeat_until": {
+                      "type": "string"
+                    },
+                    "repeat_count": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "title",
+                "priority",
+                "tags",
+                "group",
+                "description"
+              ]
+            }
+          }
+        },
+        "required": [
+          "templates"
+        ]
+      }
+    },
+    "todo_delete_template": {
+      "description": "删除一个任务模板",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "description": "模板ID"
+          }
+        },
+        "required": [
+          "template_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ]
+      }
+    },
+    "todo_apply_template": {
+      "description": "从模板创建一个新任务，可用 overrides 覆盖标题/截止日期/标签/分组",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "description": "模板ID"
+          },
+          "title": {
+            "type": "string",
+            "description": "覆盖标题（可选）"
+          },
+          "due_date": {
+            "type": "string",
+            "description": "截止时间 ISO 8601（可选）"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "覆盖标签（可选）"
+          },
+          "group": {
+            "type": "string",
+            "description": "覆盖分组（可选）"
+          }
+        },
+        "required": [
+          "template_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "title"
+        ]
+      }
+    },
+    "todo_set_reminder": {
+      "description": "为任务设置提醒提前分钟数（需任务已有截止日期），reminder_offset=0 表示到期时提醒",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "任务ID"
+          },
+          "reminder_offset": {
+            "type": "number",
+            "description": "提前 due_date 多少分钟提醒（0=到期时）"
+          }
+        },
+        "required": [
+          "task_id",
+          "reminder_offset"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "reminder_offset": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "task_id"
+        ]
+      }
+    },
+    "todo_snooze_reminder": {
+      "description": "推迟任务的提醒 N 分钟（设置 snoozedUntil = now + minutes*60000，期间不触发）",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "任务ID"
+          },
+          "minutes": {
+            "type": "number",
+            "description": "推迟分钟数（必须为正数）"
+          }
+        },
+        "required": [
+          "task_id",
+          "minutes"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "snoozed_until": {
+            "type": "string",
+            "description": "推迟到的 ISO 时间"
+          }
+        },
+        "required": [
+          "task_id",
+          "snoozed_until"
+        ]
+      }
+    },
+    "todo_dismiss_reminder": {
+      "description": "清除任务的提醒设置（reminderOffset/remindedAt/snoozedUntil 一并清除）",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "任务ID"
+          }
+        },
+        "required": [
+          "task_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "dismissed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task_id",
+          "dismissed"
+        ]
+      }
+    },
+    "todo_list_due_reminders": {
+      "description": "列出即将到期/已逾期且未提醒的任务，供 AI 主动汇报",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "include_overdue": {
+            "type": "boolean",
+            "description": "是否包含已逾期任务（默认 true）"
+          },
+          "limit": {
+            "type": "number",
+            "description": "返回数量限制，默认 50"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "reminders": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "priority": {
+                  "type": "string"
+                },
+                "due_date": {
+                  "type": "string"
+                },
+                "reminder_at": {
+                  "type": "string"
+                },
+                "snoozed_until": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "reminders",
+          "total"
+        ]
+      }
+    }
+  }
+}

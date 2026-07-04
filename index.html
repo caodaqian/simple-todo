@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>简悦清单 - 任务管理</title>
+    <script>
+      (function () {
+        try {
+          var raw = (window.utools && window.utools.dbStorage && window.utools.dbStorage.getItem('jianyue.settings')) || null;
+          var mode = 'system', accent = 'mauve';
+          if (typeof raw === 'string') {
+            var s = JSON.parse(raw);
+            if (s && (s.appearanceMode === 'light' || s.appearanceMode === 'dark' || s.appearanceMode === 'system')) mode = s.appearanceMode;
+            if (s && typeof s.accentColor === 'string') accent = s.accentColor;
+          }
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var theme = mode === 'system' ? (prefersDark ? 'mocha' : 'latte') : (mode === 'dark' ? 'mocha' : 'latte');
+          document.documentElement.setAttribute('data-theme', theme);
+          document.documentElement.setAttribute('data-accent', accent);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'mocha');
+          document.documentElement.setAttribute('data-accent', 'mauve');
+        }
+      })();
+    </script>
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+
+</html>

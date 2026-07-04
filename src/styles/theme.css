@@ -1,0 +1,245 @@
+/* ============================================================
+   简悦清单 — Semantic Theme Tokens
+   两套主题（Latte / Mocha）通过 [data-theme] 切换
+   强调色通过 [data-accent] 切换（默认 mauve）
+   ============================================================ */
+
+/* ---- Latte (Light) semantic tokens ---- */
+:root,
+[data-theme="latte"] {
+  /* Backgrounds */
+  --color-bg-base: var(--ctp-base);
+  --color-bg-surface: var(--ctp-mantle);
+  --color-bg-elevated: #ffffff;
+  --color-bg-overlay: var(--ctp-crust);
+  --color-bg-input: var(--ctp-mantle);
+  --color-bg-hover: color-mix(in srgb, var(--ctp-text) 6%, transparent);
+  --color-bg-active: color-mix(in srgb, var(--ctp-text) 10%, transparent);
+
+  /* Text */
+  --color-text-primary: var(--ctp-text);
+  --color-text-secondary: var(--ctp-subtext0);
+  --color-text-muted: var(--ctp-overlay1);
+  --color-text-inverse: var(--ctp-base);
+
+  /* Borders */
+  --color-border-subtle: var(--ctp-surface0);
+  --color-border-default: var(--ctp-surface1);
+  --color-border-strong: var(--ctp-surface2);
+
+  /* Accent (mauve by default) */
+  --color-accent: var(--ctp-mauve);
+  --color-accent-hover: color-mix(in srgb, var(--ctp-mauve) 88%, white);
+  --color-accent-active: color-mix(in srgb, var(--ctp-mauve) 88%, black);
+  --color-accent-soft: color-mix(in srgb, var(--ctp-mauve) 14%, transparent);
+  --color-accent-on: #ffffff;
+
+  /* Status */
+  --color-success: var(--ctp-green);
+  --color-warning: var(--ctp-yellow);
+  --color-danger: var(--ctp-red);
+  --color-info: var(--ctp-sky);
+  --color-success-soft: color-mix(in srgb, var(--ctp-green) 14%, transparent);
+  --color-warning-soft: color-mix(in srgb, var(--ctp-yellow) 18%, transparent);
+  --color-danger-soft: color-mix(in srgb, var(--ctp-red) 14%, transparent);
+  --color-info-soft: color-mix(in srgb, var(--ctp-sky) 14%, transparent);
+
+  /* Priority */
+  --color-priority-low: var(--ctp-sky);
+  --color-priority-medium: var(--ctp-peach);
+  --color-priority-high: var(--ctp-red);
+  --color-priority-urgent: var(--ctp-maroon);
+
+  /* Task status */
+  --color-status-todo: var(--ctp-overlay1);
+  --color-status-doing: var(--ctp-peach);
+  --color-status-done: var(--ctp-green);
+
+  /* Tag (lavender) */
+  --color-tag-bg: color-mix(in srgb, var(--ctp-lavender) 14%, transparent);
+  --color-tag-text: var(--ctp-lavender);
+  --color-tag-border: color-mix(in srgb, var(--ctp-lavender) 30%, transparent);
+
+  /* Group chip (blue) */
+  --color-group-bg: color-mix(in srgb, var(--ctp-blue) 12%, transparent);
+  --color-group-text: var(--ctp-blue);
+  --color-group-border: color-mix(in srgb, var(--ctp-blue) 28%, transparent);
+
+  /* Masks */
+  --mask-light: color-mix(in srgb, var(--ctp-crust) 25%, transparent);
+  --mask-medium: color-mix(in srgb, var(--ctp-crust) 45%, transparent);
+  --mask-heavy: color-mix(in srgb, var(--ctp-crust) 65%, transparent);
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px color-mix(in srgb, var(--ctp-mantle) 50%, transparent);
+  --shadow-md: 0 4px 12px color-mix(in srgb, var(--ctp-mantle) 60%, transparent);
+  --shadow-lg: 0 8px 28px color-mix(in srgb, var(--ctp-mantle) 70%, transparent);
+
+  /* Focus ring */
+  --ring-focus: 0 0 0 3px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+/* ---- Mocha (Dark) semantic tokens ---- */
+[data-theme="mocha"] {
+  --color-bg-base: var(--ctp-base);
+  --color-bg-surface: var(--ctp-mantle);
+  --color-bg-elevated: var(--ctp-surface0);
+  --color-bg-overlay: var(--ctp-crust);
+  --color-bg-input: var(--ctp-surface0);
+  --color-bg-hover: color-mix(in srgb, var(--ctp-text) 8%, transparent);
+  --color-bg-active: color-mix(in srgb, var(--ctp-text) 14%, transparent);
+
+  --color-text-primary: var(--ctp-text);
+  --color-text-secondary: var(--ctp-subtext1);
+  --color-text-muted: var(--ctp-overlay1);
+  --color-text-inverse: var(--ctp-crust);
+
+  --color-border-subtle: var(--ctp-surface0);
+  --color-border-default: var(--ctp-surface1);
+  --color-border-strong: var(--ctp-surface2);
+
+  --color-accent: var(--ctp-mauve);
+  --color-accent-hover: color-mix(in srgb, var(--ctp-mauve) 85%, white);
+  --color-accent-active: color-mix(in srgb, var(--ctp-mauve) 85%, black);
+  --color-accent-soft: color-mix(in srgb, var(--ctp-mauve) 18%, transparent);
+  --color-accent-on: var(--ctp-crust);
+
+  --color-success: var(--ctp-green);
+  --color-warning: var(--ctp-yellow);
+  --color-danger: var(--ctp-red);
+  --color-info: var(--ctp-sky);
+  --color-success-soft: color-mix(in srgb, var(--ctp-green) 16%, transparent);
+  --color-warning-soft: color-mix(in srgb, var(--ctp-yellow) 18%, transparent);
+  --color-danger-soft: color-mix(in srgb, var(--ctp-red) 18%, transparent);
+  --color-info-soft: color-mix(in srgb, var(--ctp-sky) 16%, transparent);
+
+  --color-priority-low: var(--ctp-sky);
+  --color-priority-medium: var(--ctp-peach);
+  --color-priority-high: var(--ctp-red);
+  --color-priority-urgent: var(--ctp-maroon);
+
+  --color-status-todo: var(--ctp-overlay0);
+  --color-status-doing: var(--ctp-peach);
+  --color-status-done: var(--ctp-green);
+
+  --color-tag-bg: color-mix(in srgb, var(--ctp-lavender) 18%, transparent);
+  --color-tag-text: var(--ctp-lavender);
+  --color-tag-border: color-mix(in srgb, var(--ctp-lavender) 35%, transparent);
+
+  --color-group-bg: color-mix(in srgb, var(--ctp-blue) 16%, transparent);
+  --color-group-text: var(--ctp-blue);
+  --color-group-border: color-mix(in srgb, var(--ctp-blue) 32%, transparent);
+
+  --mask-light: color-mix(in srgb, var(--ctp-crust) 45%, transparent);
+  --mask-medium: color-mix(in srgb, var(--ctp-crust) 65%, transparent);
+  --mask-heavy: color-mix(in srgb, var(--ctp-crust) 80%, transparent);
+
+  --shadow-sm: 0 1px 3px color-mix(in srgb, var(--ctp-crust) 55%, transparent);
+  --shadow-md: 0 4px 16px color-mix(in srgb, var(--ctp-crust) 65%, transparent);
+  --shadow-lg: 0 12px 36px color-mix(in srgb, var(--ctp-crust) 75%, transparent);
+
+  --ring-focus: 0 0 0 3px color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+
+/* ---- Accent color overrides ----
+   选用 14 个 Catppuccin accent 色覆盖 --color-accent 一族。
+   data-accent 与 data-theme 独立，二者组合任意。
+   ---- */
+[data-accent="rosewater"] {
+  --color-accent: var(--ctp-rosewater);
+}
+
+[data-accent="flamingo"] {
+  --color-accent: var(--ctp-flamingo);
+}
+
+[data-accent="pink"] {
+  --color-accent: var(--ctp-pink);
+}
+
+[data-accent="mauve"] {
+  --color-accent: var(--ctp-mauve);
+}
+
+[data-accent="red"] {
+  --color-accent: var(--ctp-red);
+}
+
+[data-accent="maroon"] {
+  --color-accent: var(--ctp-maroon);
+}
+
+[data-accent="peach"] {
+  --color-accent: var(--ctp-peach);
+}
+
+[data-accent="yellow"] {
+  --color-accent: var(--ctp-yellow);
+}
+
+[data-accent="green"] {
+  --color-accent: var(--ctp-green);
+}
+
+[data-accent="teal"] {
+  --color-accent: var(--ctp-teal);
+}
+
+[data-accent="sky"] {
+  --color-accent: var(--ctp-sky);
+}
+
+[data-accent="sapphire"] {
+  --color-accent: var(--ctp-sapphire);
+}
+
+[data-accent="blue"] {
+  --color-accent: var(--ctp-blue);
+}
+
+[data-accent="lavender"] {
+  --color-accent: var(--ctp-lavender);
+}
+
+/* 派生 accent token 跟随当前 --color-accent 重新计算 */
+[data-accent] {
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 88%, white);
+  --color-accent-active: color-mix(in srgb, var(--color-accent) 88%, black);
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  --ring-focus: 0 0 0 3px color-mix(in srgb, var(--color-accent) 38%, transparent);
+}
+
+/* ============================================================
+   兼容别名层（旧 token → 新 token）
+   说明：用于平滑迁移，将在 E6 批次清除。
+   ============================================================ */
+:root,
+[data-theme="latte"],
+[data-theme="mocha"] {
+  --color-primary: var(--color-accent);
+  --color-primary-hover: var(--color-accent-hover);
+  --color-primary-active: var(--color-accent-active);
+  --color-primary-dim: var(--color-accent-soft);
+
+  --color-bg-app: var(--color-bg-base);
+  --color-bg-sidebar: var(--color-bg-surface);
+  --color-bg-panel: var(--color-bg-elevated);
+  --color-bg-card: var(--color-bg-elevated);
+  --color-bg-input-alias: var(--color-bg-input);
+
+  --color-border: var(--color-border-default);
+  --color-border-focus: var(--color-accent);
+  --color-border-divider: var(--color-border-subtle);
+
+  --color-text-disabled: color-mix(in srgb, var(--color-text-muted) 60%, transparent);
+
+  --color-warning-dim: var(--color-warning-soft);
+  --color-success-dim: var(--color-success-soft);
+  --color-danger-dim: var(--color-danger-soft);
+  --color-danger-hover: color-mix(in srgb, var(--color-danger) 85%, white);
+  --color-danger-active: color-mix(in srgb, var(--color-danger) 85%, black);
+
+  --overlay-light: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+  --overlay-medium: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  --overlay-strong: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+}
