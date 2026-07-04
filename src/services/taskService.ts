@@ -282,8 +282,9 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 	if (remindedAt !== undefined) payload.remindedAt = remindedAt;
 	if (input.snoozedUntil !== undefined) payload.snoozedUntil = input.snoozedUntil;
 	else if (existing?.snoozedUntil !== undefined) payload.snoozedUntil = existing.snoozedUntil;
-	if (input.repeat !== undefined) payload.repeat = input.repeat;
-	else if (existing?.repeat !== undefined) payload.repeat = existing.repeat;
+	const inputHasRepeat = Object.prototype.hasOwnProperty.call(input, 'repeat');
+	if (inputHasRepeat && input.repeat !== undefined) payload.repeat = input.repeat;
+	else if (!inputHasRepeat && existing?.repeat !== undefined) payload.repeat = existing.repeat;
 	return buildTask(payload);
 };
 

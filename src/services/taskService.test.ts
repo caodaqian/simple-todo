@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import packageJson from '../../package.json';
-import type { Task } from '../types/task';
+import type { Task, UpdateTaskInput } from '../types/task';
 import { taskService } from './taskService';
 
 class MockDbStorage {
@@ -186,6 +186,20 @@ describe('taskService', () => {
 
 		expect(updated).not.toHaveProperty('dueDate');
 		expect(taskService.getById(existing.id)).not.toHaveProperty('dueDate');
+	});
+
+	it('clears repeat only when update explicitly sets it to undefined', () => {
+		const existing = createTaskFixture({
+			id: 'task-clear-repeat',
+			repeat: { type: 'weekly', interval: 1 },
+		});
+		taskService.replaceAll([existing]);
+		const updates = { repeat: undefined } as unknown as UpdateTaskInput;
+
+		const updated = taskService.update(existing.id, updates)!;
+
+		expect(updated).not.toHaveProperty('repeat');
+		expect(taskService.getById(existing.id)).not.toHaveProperty('repeat');
 	});
 
 	it('exposes npm test script for vitest workflow', () => {
