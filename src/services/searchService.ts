@@ -16,6 +16,7 @@ const PRIORITY_RANK: Record<TaskPriority, number> = {
 	low: 1,
 	medium: 2,
 	high: 3,
+	urgent: 4,
 };
 
 const DEFAULT_TAG_MATCH_MODE: TagMatchMode = 'any';
@@ -315,6 +316,7 @@ export const buildTaskOverview = (
 		low: 0,
 		medium: 0,
 		high: 0,
+		urgent: 0,
 	};
 
 	const now = options.nowTs ?? Date.now();

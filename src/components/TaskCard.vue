@@ -56,7 +56,7 @@ import AppIcon from './AppIcon.vue';
     return 'var(--color-status-done)';
   }
 
-  function priorityClass(p: TaskPriority): 'high' | 'medium' | 'low' {
+  function priorityClass(p: TaskPriority): 'high' | 'medium' | 'low' | 'urgent' {
     return p;
   }
 

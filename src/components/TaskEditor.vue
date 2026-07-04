@@ -44,6 +44,7 @@ import AppIcon from './AppIcon.vue';
     { label: '低', value: 'low' },
     { label: '中', value: 'medium' },
     { label: '高', value: 'high' },
+    { label: '紧急', value: 'urgent' },
   ];
 
   const form = ref<TaskEditorForm>(makeEmptyForm());

@@ -6,6 +6,7 @@ import {
 	isTaskInRecentDays,
 	isTaskOverdue,
 	isTaskUrgent,
+	searchAndSortTasks,
 } from './searchService';
 
 const createTask = (overrides: Partial<Task> = {}): Task => ({
@@ -52,5 +53,18 @@ describe('task date rules', () => {
 
 		expect(isTaskOverdue(doneTask, rules)).toBe(false);
 		expect(isTaskUrgent(doneTask, rules)).toBe(false);
+	});
+});
+
+describe('sortTasks by priority', () => {
+	it('按优先级 desc 排序：urgent > high > medium > low', () => {
+		const tasks = [
+			createTask({ priority: 'low' }),
+			createTask({ priority: 'urgent' }),
+			createTask({ priority: 'medium' }),
+			createTask({ priority: 'high' }),
+		];
+		const result = searchAndSortTasks(tasks, {}, { field: 'priority', order: 'desc' });
+		expect(result.map((t) => t.priority)).toEqual(['urgent', 'high', 'medium', 'low']);
 	});
 });
