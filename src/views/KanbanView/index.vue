@@ -1,12 +1,15 @@
 <script setup lang="ts">
   import { computed, ref } from 'vue';
   import AppIcon from '../../components/AppIcon.vue';
+  import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
   import SmartTaskInput from '../../components/SmartTaskInput.vue';
   import TaskCard from '../../components/TaskCard.vue';
   import TaskEditor from '../../components/TaskEditor.vue';
   import ViewToolbar from '../../components/ViewToolbar.vue';
+  import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
   import { searchAndSortTasks } from '../../services/searchService';
   import { taskService } from '../../services/taskService';
+  import { taskWorkflowService } from '../../services/taskWorkflowService';
   import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOption, TaskStatus } from '../../types/task';
 
   const props = defineProps<{
@@ -22,6 +25,8 @@
 
   const editorVisible = ref(false);
   const editingTask = ref<Task | null>(null);
+  const draggingTaskId = ref<string>('');
+  const dragOverStatus = ref<TaskStatus | null>(null);
 
   const statusOrder: TaskStatus[] = ['todo', 'doing', 'done'];
   const statusMeta: Record<TaskStatus, { label: string; color: string }> = {
@@ -52,19 +57,21 @@
     set: (value) => emit('update:sort', { field: value, order: defaultSortOrder[value] }),
   });
 
-  const reloadTasks = (): void => { /* no-op: tasks come from props */ };
-
   const effectiveSort = computed<TaskSortOption>(() =>
     props.sort ?? { field: 'updatedAt', order: defaultSortOrder.updatedAt },
   );
 
   const filteredTasks = computed(() =>
-    searchAndSortTasks(
-      props.tasks,
-      { ...props.filter },
-      effectiveSort.value,
+    taskService.getTasksInParentOrder(
+      searchAndSortTasks(
+        props.tasks,
+        { ...props.filter },
+        effectiveSort.value,
+      ),
     ),
   );
+
+  const { getTaskDepth, getParentTitle } = useTaskHierarchy(() => props.tasks);
 
   const columns = computed<Record<TaskStatus, Task[]>>(() => {
     const g: Record<TaskStatus, Task[]> = { todo: [], doing: [], done: [] };
@@ -73,8 +80,46 @@
   });
 
   const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    taskService.changeStatus(taskId, status);
+    taskWorkflowService.changeStatus(taskId, status);
     emit('refresh');
+  };
+
+  const handleDragStart = (event: DragEvent, task: Task): void => {
+    draggingTaskId.value = task.id;
+    event.dataTransfer?.setData('text/plain', task.id);
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+    }
+  };
+
+  const handleDragOver = (event: DragEvent, status: TaskStatus): void => {
+    event.preventDefault();
+    dragOverStatus.value = status;
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleDragLeave = (status: TaskStatus): void => {
+    if (dragOverStatus.value === status) {
+      dragOverStatus.value = null;
+    }
+  };
+
+  const handleDrop = (event: DragEvent, status: TaskStatus): void => {
+    event.preventDefault();
+    const taskId = event.dataTransfer?.getData('text/plain') || draggingTaskId.value;
+    draggingTaskId.value = '';
+    dragOverStatus.value = null;
+
+    const task = props.tasks.find((item) => item.id === taskId);
+    if (!task || task.status === status) return;
+    handleStatusChange(task.id, status);
+  };
+
+  const handleDragEnd = (): void => {
+    draggingTaskId.value = '';
+    dragOverStatus.value = null;
   };
 
   const handleDelete = (taskId: string): void => {
@@ -106,7 +151,9 @@
 
     <!-- Board -->
     <div class="board">
-      <div v-for="status in statusOrder" :key="status" class="board-column">
+      <div v-for="status in statusOrder" :key="status" class="board-column"
+        :class="{ 'board-column--drag-over': dragOverStatus === status }" @dragover="handleDragOver($event, status)"
+        @dragleave="handleDragLeave(status)" @drop="handleDrop($event, status)">
         <!-- Column header -->
         <div class="column-header" :style="{ '--col-color': statusMeta[status].color }">
           <span class="col-dot" />
@@ -117,13 +164,17 @@
         <!-- Cards -->
         <div class="column-cards">
           <TaskCard v-for="task in columns[status]" :key="task.id" :task="task" variant="panel"
-            priority-display="stripe" @click="handleOpenEdit">
+            priority-display="stripe" :depth="getTaskDepth(task)" :parent-title="getParentTitle(task)" draggable="true"
+            :class="{ 'task-card--dragging': draggingTaskId === task.id }" @dragstart="handleDragStart($event, task)"
+            @dragend="handleDragEnd" @click="handleOpenEdit">
             <template #actions="{ task: t }">
+              <PomodoroStartButton :task="t" />
               <button v-for="s in otherStatuses(status)" :key="s" type="button" class="btn-icon kanban-card__move"
-                :title="`移至 ${statusMeta[s].label}`" @click.stop="handleStatusChange(t.id, s)">
+                :title="`移至 ${statusMeta[s].label}`" :aria-label="`移至 ${statusMeta[s].label}`"
+                @click.stop="handleStatusChange(t.id, s)">
                 <AppIcon :name="moveIcon(s)" :size="14" />
               </button>
-              <button type="button" class="btn-icon btn-danger kanban-card__delete" title="删除"
+              <button type="button" class="btn-icon btn-danger kanban-card__delete" title="删除" aria-label="删除任务"
                 @click.stop="handleDelete(t.id)">
                 <AppIcon name="trash2" :size="14" />
               </button>
@@ -165,19 +216,28 @@
   .board {
     flex: 1;
     display: grid;
-    grid-template-columns: repeat(3, minmax(220px, 1fr));
+    grid-template-columns: repeat(3, minmax(260px, 1fr));
     gap: var(--space-3);
     min-height: 0;
-    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .board-column {
     display: flex;
     flex-direction: column;
+    min-height: 0;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-lg);
     overflow: hidden;
+    transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+  }
+
+  .board-column--drag-over {
+    border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border-subtle));
+    background: color-mix(in srgb, var(--color-accent-soft) 55%, var(--color-bg-surface));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 30%, transparent);
   }
 
   /* Column header */
@@ -209,11 +269,18 @@
   /* Cards container */
   .column-cards {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
     padding: var(--space-2) var(--space-2) var(--space-3);
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+  }
+
+  .column-cards>.task-card {
+    flex: 0 0 auto;
   }
 
   .column-empty {
@@ -221,6 +288,15 @@
     font-size: var(--text-sm);
     text-align: center;
     padding: var(--space-5) 0;
+  }
+
+  .kanban-view .task-card[draggable="true"] {
+    cursor: grab;
+  }
+
+  .kanban-view .task-card--dragging {
+    opacity: 0.55;
+    cursor: grabbing;
   }
 
   /* Slotted quick actions — fade by default, reveal on card hover.
@@ -231,13 +307,39 @@
   .kanban-card__delete {
     width: 26px;
     height: 26px;
-    opacity: 0;
-    transition: opacity var(--transition-fast);
+    opacity: 1;
+    transition: background var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   }
 
-  .kanban-view .task-card:hover .kanban-card__move,
-  .kanban-view .task-card:hover .kanban-card__delete {
-    opacity: 1;
+  /* Tablet/compact desktop: keep three columns visible without returning to cramped 220px cards. */
+  @media (min-width: 921px) and (max-width: 1100px) {
+    .kanban-view {
+      padding-left: var(--space-3);
+      padding-right: var(--space-3);
+    }
+
+    .board {
+      grid-template-columns: repeat(3, minmax(240px, 1fr));
+    }
+  }
+
+  /* Medium window: prioritize card readability and allow horizontal board scroll. */
+  @media (min-width: 721px) and (max-width: 920px) {
+    .kanban-view {
+      padding-left: var(--space-3);
+      padding-right: var(--space-3);
+    }
+
+    .board {
+      grid-template-columns: repeat(3, minmax(300px, 320px));
+      justify-content: start;
+      overflow-x: auto;
+      padding-bottom: var(--space-2);
+    }
+
+    .board-column {
+      min-width: 300px;
+    }
   }
 
   /* Narrow window: single visible column, horizontal scroll for the rest */

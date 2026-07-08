@@ -87,6 +87,7 @@ export const buildNextInstance = (task: Task, now: number = Date.now()): Task =>
 		updatedAt: now,
 		repeat: nextRepeat,
 	};
+	if (task.parentTaskId !== undefined) next.parentTaskId = task.parentTaskId;
 	if (task.allDay !== undefined) next.allDay = task.allDay;
 	// 推进 dueEnd 以保持与 dueStart 的相对 offset
 	if (task.dueStart !== undefined && task.dueEnd !== undefined) {

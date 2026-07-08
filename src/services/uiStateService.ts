@@ -22,7 +22,7 @@ const isTodoView = (value: unknown): value is TodoView =>
 	value === 'list' || value === 'kanban' || value === 'eisenhower' || value === 'calendar';
 
 /** 已知侧栏分区字面量；tag:/group: 前缀单独校验。 */
-const KNOWN_SECTIONS: readonly SideSection[] = ['today', 'week', 'overdue', 'inbox', 'done'];
+const KNOWN_SECTIONS: readonly SideSection[] = ['today', 'week', 'overdue', 'inbox', 'done', 'archived'];
 
 const isSideSection = (value: unknown): value is SideSection => {
 	if (typeof value !== 'string' || value.length === 0) return false;

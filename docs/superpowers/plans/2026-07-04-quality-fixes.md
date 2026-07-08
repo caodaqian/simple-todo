@@ -4,7 +4,7 @@
 
 **Goal:** 修复三个阻碍插件"合格"的核心问题：urgent 类型、CalendarView 数据流孤立、提醒/重复任务 UI 缺失。
 
-**Architecture:** 
+**Architecture:**
 1. Task 1：把 `'urgent'` 加入 `TaskPriority` 并在所有类型声明处对齐，消除 5 处类型错误；
 2. Task 2：CalendarView 改为从 prop 接收 `tasks`，与其他三个视图对齐；
 3. Task 3：TaskEditor 侧栏补充提醒（reminderOffset）和重复规则（repeat）两个 side-card。

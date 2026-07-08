@@ -1,12 +1,15 @@
 <script setup lang="ts">
   import { computed, ref } from 'vue';
   import AppIcon from '../../components/AppIcon.vue';
+  import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
   import SmartTaskInput from '../../components/SmartTaskInput.vue';
   import TaskCard from '../../components/TaskCard.vue';
   import TaskEditor from '../../components/TaskEditor.vue';
   import ViewToolbar from '../../components/ViewToolbar.vue';
+  import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
   import { searchAndSortTasks } from '../../services/searchService';
   import { taskService } from '../../services/taskService';
+  import { taskWorkflowService } from '../../services/taskWorkflowService';
   import type { SaveTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../types/task';
 
   const props = defineProps<{
@@ -38,12 +41,16 @@
   };
 
   const filteredTasks = computed(() =>
-    searchAndSortTasks(
-      props.tasks,
-      { ...props.filter },
-      { field: 'dueDate', order: 'asc' },
+    taskService.getTasksInParentOrder(
+      searchAndSortTasks(
+        props.tasks,
+        { ...props.filter },
+        { field: 'dueDate', order: 'asc' },
+      ),
     ),
   );
+
+  const { getTaskDepth, getParentTitle } = useTaskHierarchy(() => props.tasks);
 
   const quadrants = computed<Record<QuadrantKey, Task[]>>(() => {
     const g: Record<QuadrantKey, Task[]> = {
@@ -58,7 +65,7 @@
     ts ? new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '';
 
   const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    taskService.changeStatus(taskId, status);
+    taskWorkflowService.changeStatus(taskId, status);
     emit('refresh');
   };
 
@@ -109,8 +116,10 @@
 
           <div class="quadrant-cards">
             <TaskCard v-for="task in quadrants[quad.key]" :key="task.id" :task="task" variant="tile"
-              priority-display="none" :show-status-toggle="false" @click="handleOpenEdit">
+              priority-display="none" :show-status-toggle="false" :depth="getTaskDepth(task)"
+              :parent-title="getParentTitle(task)" @click="handleOpenEdit">
               <template #actions="{ task: t }">
+                <PomodoroStartButton :task="t" />
                 <button type="button" class="btn-icon q-action-btn" :class="{ active: t.status === 'todo' }" title="待办"
                   @click.stop="handleStatusChange(t.id, 'todo')">
                   <AppIcon name="circle" :size="14" />

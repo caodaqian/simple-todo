@@ -2,8 +2,10 @@
   import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
 import FilterToolbar from '../../components/FilterToolbar.vue';
+import PomodoroStatusPill from '../../components/PomodoroStatusPill.vue';
 import SettingsPanel from '../../components/SettingsPanel.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
+import TaskReviewPanel from '../../components/TaskReviewPanel.vue';
 import { catchUpReminders, useReminderScheduler } from '../../composables/useReminderScheduler';
 import { mergePatch, toggleArrayValue } from '../../services/filterUtils';
 import { notifyService } from '../../services/notifyService';
@@ -16,6 +18,9 @@ import {
     isTaskOverdue,
 } from '../../services/searchService';
 import { settingsService } from '../../services/settingsService';
+import { buildSmartOrganizationPlan } from '../../services/smartTaskOrganizerService';
+import { stickyNoteService } from '../../services/stickyNoteService';
+import { openStickyNoteWindow } from '../../services/stickyWindowService';
 import { taskService } from '../../services/taskService';
 import { uiStateService } from '../../services/uiStateService';
 import type { AppSettings, SavedFilterView, TodoView } from '../../types/settings';
@@ -30,6 +35,7 @@ import ListView from '../ListView/index.vue';
   const settings = ref<AppSettings>(settingsService.getSettings());
   const settingsPanelVisible = ref(false);
   const editorVisible = ref(false);
+  const reviewPanelVisible = ref(false);
   const tasks = ref<Task[]>([]);
 
   // 视图状态：从持久化 uiState 恢复"上次视图"，重启后保持 currentView/分区/筛选/排序。
@@ -117,6 +123,28 @@ import ListView from '../ListView/index.vue';
     settings.value = settingsService.getSettings();
   };
 
+  const handleStickyOpenFailure = (reason: string): void => {
+    const message = reason === 'utools-unavailable' ? '请在 uTools 插件中打开便签' : '便签窗口创建失败';
+    notifyService.notify('便签', message);
+    console.warn(message);
+  };
+
+  const openCurrentStickyNote = (): void => {
+    const result = openStickyNoteWindow(stickyNoteService.buildSourceFromCurrent({
+      title: sectionLabel.value,
+      view: currentView.value,
+      section: activeSection.value,
+      filter: { ...currentFilter.value },
+      sort: { ...activeSort.value },
+    }));
+    if (!result.ok) handleStickyOpenFailure(result.reason);
+  };
+
+  const openSavedStickyNote = (view: SavedFilterView): void => {
+    const result = openStickyNoteWindow(stickyNoteService.buildSourceFromSaved(view));
+    if (!result.ok) handleStickyOpenFailure(result.reason);
+  };
+
   /* ── View tabs ────────────────────────────────────────────────── */
   const viewTabs: Array<{ key: TodoView; icon: string; label: string }> = [
     { key: 'list', icon: 'list', label: '列表' },
@@ -132,13 +160,16 @@ import ListView from '../ListView/index.vue';
     { key: 'overdue' as SideSection, label: '已过期', icon: 'alarmClock' },
     { key: 'inbox' as SideSection, label: '收集箱', icon: 'inbox' },
     { key: 'done' as SideSection, label: '已完成', icon: 'check' },
+    { key: 'archived' as SideSection, label: '已归档', icon: 'archive' },
   ];
 
   /* ── Tags in sidebar ──────────────────────────────────────────── */
-  const allTags = computed(() => extractTaskTags(tasks.value));
+  const activeTasks = computed(() => tasks.value.filter((task) => task.archivedAt === undefined));
+
+  const allTags = computed(() => extractTaskTags(activeTasks.value));
 
   /* ── Groups in sidebar ────────────────────────────────────── */
-  const allGroups = computed(() => extractTaskGroups(tasks.value));
+  const allGroups = computed(() => extractTaskGroups(activeTasks.value));
 
   /* ── Section presets：点击侧边栏节点即把对应 filter 预设写入 activeFilter ── */
   const buildSectionPreset = (section: SideSection): TaskSearchFilter => {
@@ -156,6 +187,8 @@ import ListView from '../ListView/index.vue';
         return base;
       case 'done':
         return { ...base, showCompleted: true, status: 'done' };
+      case 'archived':
+        return { ...base, archived: true, showCompleted: true };
       default:
         if (section.startsWith('tag:')) {
           const tag = section.slice(4);
@@ -188,19 +221,21 @@ import ListView from '../ListView/index.vue';
 
     switch (key) {
       case 'today':
-        return tasks.value.filter(t => isTaskDueToday(t, rules) && t.status !== 'done').length;
+        return activeTasks.value.filter(t => isTaskDueToday(t, rules) && t.status !== 'done').length;
       case 'week':
-        return tasks.value.filter(t => isTaskInRecentDays(t, rules) && t.status !== 'done').length;
+        return activeTasks.value.filter(t => isTaskInRecentDays(t, rules) && t.status !== 'done').length;
       case 'overdue':
-        return tasks.value.filter(t => isTaskOverdue(t, rules)).length;
+        return activeTasks.value.filter(t => isTaskOverdue(t, rules)).length;
       case 'inbox':
-        return tasks.value.filter(t => t.status !== 'done').length;
+        return activeTasks.value.filter(t => t.status !== 'done').length;
       case 'done':
-        return tasks.value.filter(t => t.status === 'done').length;
+        return activeTasks.value.filter(t => t.status === 'done').length;
+      case 'archived':
+        return tasks.value.filter(t => t.archivedAt !== undefined).length;
       default:
         if (key.startsWith('group:')) {
           const groupName = key.slice(6);
-          return tasks.value.filter(t => t.group === groupName).length;
+          return activeTasks.value.filter(t => t.group === groupName).length;
         }
         return 0;
     }
@@ -223,6 +258,23 @@ import ListView from '../ListView/index.vue';
 
   const handleTaskSaved = (): void => {
     loadTasks();
+  };
+
+  const applySmartOrganization = (): void => {
+    const plan = buildSmartOrganizationPlan(activeTasks.value);
+    if (plan.changes.length === 0) {
+      notifyService.notify('智能整理', '当前任务元数据已较完整');
+      return;
+    }
+
+    let changed = 0;
+    for (const change of plan.changes) {
+      if (taskService.update(change.taskId, change.patch)) {
+        changed += 1;
+      }
+    }
+    loadTasks();
+    notifyService.notify('智能整理完成', `已整理 ${changed} 项任务`);
   };
 
   /* ── External change refresh ──────────────────────────────────── */
@@ -353,7 +405,9 @@ import ListView from '../ListView/index.vue';
         </div>
 
         <div v-if="savingViewMode" class="saved-view-form">
+          <label class="sr-only" for="saved-view-name-input">视图名称</label>
           <input
+            id="saved-view-name-input"
             ref="savedViewInputRef"
             v-model.trim="newViewName"
             type="text"
@@ -380,6 +434,9 @@ import ListView from '../ListView/index.vue';
           </button>
           <button type="button" class="saved-view-delete" :title="`删除视图 ${view.name}`" :aria-label="`删除视图 ${view.name}`" @click.stop="deleteSavedView(view.id)">
             <AppIcon name="x" :size="12" />
+          </button>
+          <button type="button" class="saved-view-delete" :title="`打开便签 ${view.name}`" :aria-label="`打开便签 ${view.name}`" @click.stop="openSavedStickyNote(view)">
+            <AppIcon name="pin" :size="12" />
           </button>
         </div>
         <p v-if="savedViews.length === 0 && !savingViewMode" class="sidebar-empty-hint">暂无保存视图</p>
@@ -408,6 +465,18 @@ import ListView from '../ListView/index.vue';
 
         <div class="hub-header__spacer" />
 
+        <PomodoroStatusPill />
+
+        <button class="btn btn-ghost sticky-open-btn" title="打开当前视图便签" @click="openCurrentStickyNote">
+          <AppIcon name="pin" :size="16" />
+          <span>便签</span>
+        </button>
+
+        <button class="btn btn-ghost sticky-open-btn" :class="{ active: reviewPanelVisible }" title="统计与复盘" @click="reviewPanelVisible = !reviewPanelVisible">
+          <AppIcon name="star" :size="16" />
+          <span>复盘</span>
+        </button>
+
         <!-- 顶部筛选下拉（带已应用数量徽标） -->
         <FilterToolbar
           v-model="activeFilter"
@@ -427,6 +496,8 @@ import ListView from '../ListView/index.vue';
           :class="{ 'chip--active': activeTags.includes(tag.name) }" style="cursor:pointer"
           @click="toggleTagFilter(tag.name)">#{{ tag.name }}</span>
       </div>
+
+      <TaskReviewPanel v-if="reviewPanelVisible" :tasks="tasks" @organize="applySmartOrganization" />
 
       <!-- Views -->
       <div class="hub-view-container">
@@ -517,6 +588,18 @@ import ListView from '../ListView/index.vue';
   .view-icon-btn:hover {
     background: var(--color-bg-hover);
     color: var(--color-text-primary);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .view-icon-btn.active {
@@ -743,48 +826,217 @@ import ListView from '../ListView/index.vue';
     overflow-x: hidden;
   }
 
-  /* ── Responsive: collapse sidebar to icon rail ──────────────── */
+  /* ── Responsive: compact small-window navigation ─────────────── */
   @media (max-width: 720px) {
-    .hub-sidebar {
-      width: 56px;
-      min-width: 56px;
+    .hub-root {
+      flex-direction: column;
     }
-    .sidebar-item-label,
-    .sidebar-tags-header > span,
-    .sidebar-empty-hint,
+
+    .hub-sidebar {
+      width: 100%;
+      min-width: 0;
+      max-height: 112px;
+      flex-direction: column;
+      overflow-x: auto;
+      overflow-y: hidden;
+      border-right: none;
+      border-bottom: 1px solid var(--color-border-subtle);
+      background: color-mix(in srgb, var(--color-bg-surface) 96%, transparent);
+    }
+
+    .hub-main {
+      min-height: 0;
+    }
+
+    .sidebar-views.view-tabs {
+      display: flex;
+      flex: 0 0 auto;
+      gap: var(--space-1);
+      margin: var(--space-1) var(--space-2) 0;
+      padding: 3px;
+      width: max-content;
+      min-width: calc(100% - var(--space-4));
+      border-bottom: none;
+      border-radius: var(--radius-full);
+    }
+
+    .sidebar-views .view-tab {
+      flex: 1 0 auto;
+      width: auto;
+      min-width: 64px;
+      height: 30px;
+      border-radius: var(--radius-full);
+      padding: 0 var(--space-2);
+    }
+
+    .view-tab__label {
+      display: inline;
+      font-size: var(--text-xs);
+    }
+
+    .sidebar-sections {
+      display: flex;
+      gap: var(--space-1);
+      padding: var(--space-1) var(--space-2) var(--space-2);
+      overflow-x: auto;
+      flex: 0 0 auto;
+    }
+
+    .sidebar-item {
+      width: auto;
+      min-width: max-content;
+      justify-content: center;
+      gap: 4px;
+      padding: 5px var(--space-2);
+      border: 1px solid var(--color-border-subtle);
+      border-radius: var(--radius-full);
+      background: var(--color-bg-elevated);
+      font-size: var(--text-xs);
+    }
+
+    .sidebar-item.active {
+      border-color: color-mix(in srgb, var(--color-accent) 34%, transparent);
+      background: var(--color-accent-soft);
+      color: var(--color-accent);
+    }
+
+    .sidebar-item-icon {
+      width: 14px;
+    }
+
+    .sidebar-item-label {
+      display: inline;
+      max-width: 5em;
+    }
+
+    .sidebar-item .count-badge {
+      display: inline-flex;
+      transform: scale(0.9);
+      transform-origin: center;
+    }
+
+    .sidebar-groups-section,
+    .sidebar-tags-section,
+    .sidebar-saved-views,
+    .sidebar-bottom {
+      display: none;
+    }
+
+    .hub-header {
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-2);
+    }
+
+    .hub-title {
+      max-width: 45vw;
+      font-size: var(--text-lg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .hub-header__chips {
+      order: 3;
+      flex-basis: 100%;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .hub-header__spacer {
+      flex: 1 1 auto;
+    }
+
+    .sticky-open-btn span,
+    .hub-add-btn__label {
+      display: none;
+    }
+
+    .sticky-open-btn,
+    .hub-add-btn {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      justify-content: center;
+    }
+
+    .tag-filter-bar {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding: var(--space-1) var(--space-2);
+      gap: 4px;
+    }
+
+    .tag-filter-bar .tag-chip {
+      flex: 0 0 auto;
+    }
+
+    .hub-view-container {
+      min-height: 0;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .hub-sidebar {
+      max-height: 104px;
+    }
+
+    .sidebar-views .view-tab {
+      min-width: 52px;
+      padding: 0 7px;
+    }
+
     .view-tab__label,
     .hub-add-btn__label {
       display: none;
     }
-    .sidebar-views.view-tabs {
-      grid-template-columns: 1fr;
-      margin: var(--space-1);
-      padding: var(--space-1);
+
+    .sidebar-item-label {
+      max-width: 4em;
     }
-    .sidebar-views .view-tab {
-      width: 100%;
-      height: 32px;
+
+    .hub-title {
+      max-width: 36vw;
     }
-    .sidebar-item {
-      justify-content: center;
+  }
+
+  @media (min-width: 721px) and (max-width: 920px) {
+    .hub-sidebar {
+      width: 176px;
+      min-width: 176px;
+    }
+
+    .sidebar-views {
+      margin: var(--space-2);
       padding: var(--space-2);
     }
-    .sidebar-item .count-badge {
+
+    .hub-header {
+      padding: var(--space-3);
+      gap: var(--space-1);
+    }
+
+    .hub-title {
+      font-size: var(--text-lg);
+    }
+
+    .sticky-open-btn span,
+    .hub-add-btn__label {
       display: none;
     }
-    .sidebar-saved-row {
+
+    .sticky-open-btn,
+    .hub-add-btn {
+      width: 32px;
+      height: 32px;
+      padding: 0;
       justify-content: center;
-      gap: 0;
     }
-    .sidebar-saved-item {
-      flex: 0 0 auto;
-      padding: var(--space-2);
-    }
-    .sidebar-saved-row .saved-view-delete {
-      opacity: 1;
-    }
-    .sidebar-bottom {
-      justify-content: center;
+
+    .tag-filter-bar {
+      padding: var(--space-2) var(--space-3);
     }
   }
 </style>

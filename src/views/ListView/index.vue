@@ -1,12 +1,15 @@
 <script setup lang="ts">
   import { computed, ref } from 'vue';
   import AppIcon from '../../components/AppIcon.vue';
+  import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
   import SmartTaskInput from '../../components/SmartTaskInput.vue';
   import TaskCard from '../../components/TaskCard.vue';
   import TaskEditor from '../../components/TaskEditor.vue';
   import ViewToolbar from '../../components/ViewToolbar.vue';
+  import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
   import { searchAndSortTasks } from '../../services/searchService';
   import { taskService } from '../../services/taskService';
+  import { taskWorkflowService } from '../../services/taskWorkflowService';
   import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField, TaskSortOption, TaskStatus } from '../../types/task';
 
   const props = defineProps<{
@@ -55,21 +58,24 @@
     { label: '紧急', value: 'urgent' },
   ];
 
-  const reloadTasks = (): void => { /* no-op: tasks come from props */ };
-
   const effectiveSort = computed<TaskSortOption>(() =>
     props.sort ?? { field: 'updatedAt', order: defaultSortOrder.updatedAt },
   );
 
   const visibleTasks = computed(() =>
-    searchAndSortTasks(
-      props.tasks,
-      { ...props.filter },
-      effectiveSort.value,
+    taskService.getTasksInParentOrder(
+      searchAndSortTasks(
+        props.tasks,
+        { ...props.filter },
+        effectiveSort.value,
+      ),
     ),
   );
 
+  const { getTaskDepth, getParentTitle } = useTaskHierarchy(() => props.tasks);
+
   const selectedCount = computed(() => selectedIds.value.size);
+  const isArchiveView = computed(() => props.filter?.archived === true);
 
   const groupOptions = computed(() => {
     const set = new Set<string>();
@@ -120,7 +126,6 @@
   };
 
   const finalizeBatch = (): void => {
-    reloadTasks();
     emit('refresh');
     exitBatchMode();
   };
@@ -129,7 +134,7 @@
 
   const batchSetStatus = (status: TaskStatus): void => {
     if (selectedIds.value.size === 0) return;
-    taskService.bulkUpdate(selectedArray(), { status });
+    taskWorkflowService.bulkUpdateStatus(selectedArray(), status);
     finalizeBatch();
   };
 
@@ -152,8 +157,20 @@
     finalizeBatch();
   };
 
+  const batchArchive = (): void => {
+    if (selectedIds.value.size === 0) return;
+    taskService.bulkArchive(selectedArray());
+    finalizeBatch();
+  };
+
+  const batchUnarchive = (): void => {
+    if (selectedIds.value.size === 0) return;
+    taskService.bulkUnarchive(selectedArray());
+    finalizeBatch();
+  };
+
   const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    taskService.changeStatus(taskId, status);
+    taskWorkflowService.changeStatus(taskId, status);
     emit('refresh');
   };
 
@@ -167,6 +184,16 @@
 
   const handleDelete = (taskId: string): void => {
     taskService.delete(taskId);
+    emit('refresh');
+  };
+
+  const handleArchive = (taskId: string): void => {
+    taskService.archive(taskId);
+    emit('refresh');
+  };
+
+  const handleUnarchive = (taskId: string): void => {
+    taskService.unarchive(taskId);
     emit('refresh');
   };
 
@@ -214,10 +241,14 @@
       </div>
       <span class="toolbar-divider" />
       <div class="batch-bar__group">
-        <select class="batch-select" v-model="batchPriority" @change="batchSetPriority" title="改优先级">
+        <label class="sr-only" for="batch-priority-select">批量修改优先级</label>
+        <select id="batch-priority-select" class="batch-select" v-model="batchPriority" @change="batchSetPriority"
+          title="改优先级">
           <option v-for="o in priorityOptions" :key="o.value" :value="o.value">优先级: {{ o.label }}</option>
         </select>
-        <input class="batch-input" list="batch-group-options" v-model="batchGroup" placeholder="改分组"
+        <label class="sr-only" for="batch-group-input">批量修改分组</label>
+        <input id="batch-group-input" class="batch-input" list="batch-group-options" v-model="batchGroup"
+          placeholder="改分组"
           @keydown.enter.prevent="batchSetGroup" />
         <datalist id="batch-group-options">
           <option v-for="g in groupOptions" :key="g" :value="g" />
@@ -226,6 +257,8 @@
       </div>
       <span class="toolbar-divider" />
       <div class="batch-bar__group">
+        <button v-if="isArchiveView" type="button" class="btn btn-ghost" @click="batchUnarchive">恢复归档</button>
+        <button v-else type="button" class="btn btn-ghost" @click="batchArchive">归档</button>
         <button type="button" class="btn btn-danger" @click="batchDelete">
           <AppIcon name="trash2" :size="14" /><span>删除</span>
         </button>
@@ -244,9 +277,19 @@
     <!-- Task list -->
     <div v-else class="task-list">
       <TaskCard v-for="task in visibleTasks" :key="task.id" :task="task" variant="row" :selectable="batchMode"
-        :selected="isSelected(task.id)" @click="handleOpenEdit" @toggle-status="handleToggleStatusClick"
+        :selected="isSelected(task.id)" :depth="getTaskDepth(task)" :parent-title="getParentTitle(task)"
+        @click="handleOpenEdit" @toggle-status="handleToggleStatusClick"
         @toggle-select="onToggleSelect">
         <template #actions="{ task: t }">
+          <PomodoroStartButton v-if="!batchMode" :task="t" />
+          <button v-if="!batchMode && t.archivedAt" type="button" class="btn-icon task-card__archive" title="恢复归档"
+            @click.stop="handleUnarchive(t.id)">
+            <AppIcon name="archiveRestore" :size="14" />
+          </button>
+          <button v-else-if="!batchMode" type="button" class="btn-icon task-card__archive" title="归档"
+            @click.stop="handleArchive(t.id)">
+            <AppIcon name="archive" :size="14" />
+          </button>
           <button v-if="!batchMode" type="button" class="btn-icon btn-danger task-card__delete" title="删除"
             @click.stop="handleDelete(t.id)">
             <AppIcon name="trash2" :size="14" />
@@ -255,7 +298,7 @@
       </TaskCard>
     </div>
 
-    <TaskEditor v-model="editorVisible" :task="editingTask" @saved="handleSaved" />
+    <TaskEditor v-model="editorVisible" :task="editingTask" @saved="handleSaved" @open-task="handleOpenEdit" />
   </section>
 </template>
 
@@ -286,6 +329,18 @@
     color: var(--color-accent);
     border-color: var(--color-accent);
     background: var(--color-accent-soft);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   /* Empty state */
@@ -320,6 +375,7 @@
   /* Slotted delete button: hidden by default, revealed on TaskCard hover.
      The slotted button retains this view's scoped attribute, so the base
      rule matches. The hover part crosses into TaskCard's scope via :deep(). */
+  .task-card__archive,
   .task-card__delete {
     width: 28px;
     height: 28px;
@@ -327,6 +383,7 @@
     transition: opacity var(--transition-fast);
   }
 
+  .list-view :deep(.task-card:hover) .task-card__archive,
   .list-view :deep(.task-card:hover) .task-card__delete {
     opacity: 1;
   }
@@ -374,16 +431,53 @@
   }
 
   @media (max-width: 720px) {
+    .list-view {
+      padding: var(--space-2);
+      gap: var(--space-2);
+    }
+
+    .list-view :deep(.view-toolbar) {
+      gap: var(--space-1);
+    }
+
+    .sort-select {
+      min-width: 92px;
+      height: 30px;
+      padding: 0 var(--space-2);
+    }
+
+    .task-list {
+      gap: var(--space-1);
+    }
+
+    .task-card__archive,
+    .task-card__delete {
+      opacity: 1;
+      width: 26px;
+      height: 26px;
+    }
+
     .batch-bar {
       flex-wrap: wrap;
+      padding: var(--space-2);
+      gap: var(--space-1);
     }
 
     .batch-bar__group {
       flex-wrap: wrap;
+      gap: 4px;
     }
 
     .batch-bar .toolbar-divider {
       display: none;
+    }
+
+    .batch-select {
+      min-width: 112px;
+    }
+
+    .batch-input {
+      width: 96px;
     }
   }
 </style>

@@ -5,7 +5,7 @@ import type { TaskSearchFilter, TaskSortOption } from './task';
  * 侧边栏分区标识。仅用于侧边栏高亮，不再派生 filter。
  * 与 TodoHub 内的 SideSection 保持一致。
  */
-export type SideSection = 'today' | 'week' | 'overdue' | 'inbox' | 'done' | `tag:${string}` | `group:${string}`;
+export type SideSection = 'today' | 'week' | 'overdue' | 'inbox' | 'done' | 'archived' | `tag:${string}` | `group:${string}`;
 
 /**
  * 运行时视图状态：用户当前选中的视图、侧栏分区、筛选与排序。

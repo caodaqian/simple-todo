@@ -19,6 +19,8 @@ import AppIcon from './AppIcon.vue';
       selected?: boolean;
       maxTags?: number;
       clickable?: boolean;
+      depth?: number;
+      parentTitle?: string;
     }>(),
     {
       variant: 'row',
@@ -28,6 +30,7 @@ import AppIcon from './AppIcon.vue';
       selected: false,
       maxTags: 3,
       clickable: true,
+      depth: 0,
     },
   );
 
@@ -120,8 +123,13 @@ import AppIcon from './AppIcon.vue';
   );
 
   const isDone = computed(() => props.task.status === 'done');
+  const isChildTask = computed(() => props.depth > 0 || !!props.parentTitle || !!props.task.parentTaskId);
   const overdue = computed(() => isOverdue(props.task));
   const dueLabel = computed(() => formatDueLabel(props.task));
+  const descriptionPreview = computed(() => props.task.description.trim().replace(/\s+/g, ' '));
+  const cardStyle = computed<Record<string, string>>(() => ({
+    '--task-card-depth': String(Math.max(0, props.depth)),
+  }));
 
   function handleBodyClick(): void {
     if (props.clickable) emit('click', props.task);
@@ -129,16 +137,22 @@ import AppIcon from './AppIcon.vue';
 </script>
 
 <template>
-  <div class="task-card" :class="[
+  <div class="task-card" :style="cardStyle" :class="[
     `task-card--${variant}`,
     {
       'task-card--done': isDone,
       'task-card--selectable': selectable,
+      'task-card--child': isChildTask,
     },
   ]" @click="handleBodyClick">
     <!-- ============ ROW ============ -->
     <template v-if="variant === 'row'">
-      <input v-if="selectable" type="checkbox" class="task-card__checkbox" :checked="selected"
+      <span v-if="isChildTask" class="task-card__child-connector" aria-hidden="true">
+        <AppIcon name="listTree" :size="13" />
+      </span>
+      <label v-if="selectable" class="sr-only" :for="`task-select-${task.id}`">选择任务 {{ task.title }}</label>
+      <input v-if="selectable" :id="`task-select-${task.id}`" type="checkbox" class="task-card__checkbox"
+        :checked="selected"
         @click.stop="emit('toggle-select', task)" />
       <button v-else-if="showStatusToggle" type="button" class="task-card__status" :class="task.status"
         :title="`状态: ${task.status}`" @click.stop="emit('toggle-status', task)">
@@ -154,6 +168,8 @@ import AppIcon from './AppIcon.vue';
           <span v-if="dueLabel" class="task-card__due" :class="{ overdue }">{{ dueLabel }}</span>
         </div>
         <div class="task-card__meta-row">
+          <span v-if="isChildTask" class="task-card__child-label">子任务</span>
+          <span v-if="parentTitle" class="task-card__parent-context">属于：{{ parentTitle }}</span>
           <span v-if="task.group" class="chip chip--group">{{ task.group }}</span>
           <span v-for="tag in visibleTags" :key="tag" class="tag-chip">{{ tag }}</span>
           <span v-if="hiddenTagCount > 0" class="task-card__tag-overflow">
@@ -179,11 +195,14 @@ import AppIcon from './AppIcon.vue';
         <div class="task-card__header-row">
           <span v-if="priorityDisplay === 'dot'" class="priority-dot" :class="priorityClass(task.priority)"
             aria-hidden="true" />
-          <p class="task-card__title task-card__title--clamp2">{{ task.title }}</p>
-          <div class="task-card__actions" @click.stop>
-            <slot name="actions" :task="task" />
-          </div>
+          <p class="task-card__title task-card__title--clamp3">{{ task.title }}</p>
         </div>
+
+        <div class="task-card__quick-actions-row" @click.stop>
+          <slot name="actions" :task="task" />
+        </div>
+
+        <p v-if="descriptionPreview" class="task-card__description-preview">{{ descriptionPreview }}</p>
 
         <div v-if="task.tags.length > 0" class="task-card__tags-row">
           <span v-for="tag in visibleTags" :key="tag" class="tag-chip">{{ tag }}</span>
@@ -193,6 +212,8 @@ import AppIcon from './AppIcon.vue';
         </div>
 
         <div class="task-card__footer-row">
+          <span v-if="isChildTask" class="task-card__child-label">子任务</span>
+          <span v-if="parentTitle" class="task-card__parent-context">属于：{{ parentTitle }}</span>
           <span v-if="task.group" class="chip chip--group">{{ task.group }}</span>
           <span v-if="dueLabel" class="task-card__due" :class="{ overdue }">
             <AppIcon name="calendarClock" :size="12" />
@@ -216,6 +237,8 @@ import AppIcon from './AppIcon.vue';
             aria-hidden="true" />
         </div>
         <div class="task-card__meta-row">
+          <span v-if="isChildTask" class="task-card__child-label">子任务</span>
+          <span v-if="parentTitle" class="task-card__parent-context">属于：{{ parentTitle }}</span>
           <span v-if="dueLabel" class="task-card__due" :class="{ overdue }">
             <AppIcon name="calendarClock" :size="12" />
             {{ dueLabel }}
@@ -237,6 +260,8 @@ import AppIcon from './AppIcon.vue';
       <span v-if="priorityDisplay === 'dot'" class="priority-dot" :class="priorityClass(task.priority)"
         aria-hidden="true" />
       <span class="task-card__title">{{ task.title }}</span>
+      <span v-if="isChildTask" class="task-card__child-label">子任务</span>
+      <span v-if="parentTitle" class="task-card__parent-context">属于：{{ parentTitle }}</span>
       <span v-for="tag in visibleTags" :key="tag" class="tag-chip">{{ tag }}</span>
       <span v-if="hiddenTagCount > 0" class="task-card__tag-overflow">
         +{{ hiddenTagCount }}
@@ -269,6 +294,45 @@ import AppIcon from './AppIcon.vue';
     cursor: default;
   }
 
+  .task-card--row.task-card--child {
+    margin-left: calc(var(--task-card-depth, 0) * 28px);
+    border-left: 2px solid color-mix(in srgb, var(--color-accent) 34%, var(--color-border-subtle));
+    background: color-mix(in srgb, var(--color-bg-elevated) 84%, var(--color-accent-soft));
+  }
+
+  .task-card--panel.task-card--child,
+  .task-card--tile.task-card--child,
+  .task-card--day.task-card--child {
+    margin-left: calc(var(--task-card-depth, 0) * 20px);
+    border-left: 2px solid color-mix(in srgb, var(--color-accent) 34%, var(--color-border-subtle));
+    background: color-mix(in srgb, var(--color-bg-elevated) 86%, var(--color-accent-soft));
+  }
+
+  .task-card--panel.task-card--child {
+    position: relative;
+  }
+
+  .task-card--panel.task-card--child::before,
+  .task-card--tile.task-card--child::before,
+  .task-card--day.task-card--child::before {
+    content: '';
+    position: absolute;
+    left: -12px;
+    top: 50%;
+    width: 10px;
+    border-top: 1px dashed color-mix(in srgb, var(--color-accent) 45%, var(--color-border-default));
+  }
+
+  .task-card__child-connector {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 24px;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+  }
+
   .task-card:hover {
     background: var(--color-bg-hover);
     border-color: var(--color-border-default);
@@ -284,6 +348,18 @@ import AppIcon from './AppIcon.vue';
 
   .task-card--selectable {
     cursor: pointer;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   /* ---------- Status button ---------- */
@@ -340,7 +416,7 @@ import AppIcon from './AppIcon.vue';
     color: var(--color-text-primary);
   }
 
-  .task-card__title--clamp2 {
+  .task-card__title--clamp3 {
     margin: 0;
     font-size: var(--text-md);
     font-weight: 500;
@@ -349,7 +425,7 @@ import AppIcon from './AppIcon.vue';
     min-width: 0;
     overflow: hidden;
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     word-break: break-word;
     white-space: normal;
@@ -413,6 +489,25 @@ import AppIcon from './AppIcon.vue';
     white-space: nowrap;
   }
 
+  .task-card__child-label,
+  .task-card__parent-context {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    white-space: nowrap;
+    color: var(--color-text-muted);
+  }
+
+  .task-card__child-label {
+    padding: 0 6px;
+    border-radius: var(--radius-full);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+
   .task-card__tag-overflow {
     font-size: var(--text-xs);
     color: var(--color-text-muted);
@@ -458,10 +553,10 @@ import AppIcon from './AppIcon.vue';
   .task-card--panel .task-card__content {
     flex: 1;
     min-width: 0;
-    padding: var(--space-2) var(--space-3);
+    padding: var(--space-3);
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: var(--space-2);
   }
 
   .task-card--panel .task-card__header-row {
@@ -476,6 +571,26 @@ import AppIcon from './AppIcon.vue';
     flex-wrap: wrap;
   }
 
+  .task-card--panel .task-card__quick-actions-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+    margin-top: calc(-1 * var(--space-1));
+  }
+
+  .task-card--panel .task-card__description-preview {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+    line-height: 1.45;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    word-break: break-word;
+  }
+
   .task-card--panel .task-card__footer-row {
     display: flex;
     align-items: center;
@@ -487,6 +602,7 @@ import AppIcon from './AppIcon.vue';
 
   /* ============ Tile variant ============ */
   .task-card--tile {
+    position: relative;
     display: block;
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
@@ -521,6 +637,7 @@ import AppIcon from './AppIcon.vue';
 
   /* ============ Day variant ============ */
   .task-card--day {
+    position: relative;
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
     transition:
@@ -542,7 +659,70 @@ import AppIcon from './AppIcon.vue';
   /* ---------- Responsive ---------- */
   @media (max-width: 720px) {
     .task-card--row {
+      align-items: flex-start;
       gap: var(--space-1);
+      padding: var(--space-2);
+      border-radius: var(--radius-sm);
+    }
+
+    .task-card--row.task-card--child {
+      margin-left: calc(var(--task-card-depth, 0) * 16px);
+    }
+
+    .task-card--panel.task-card--child,
+    .task-card--tile.task-card--child,
+    .task-card--day.task-card--child {
+      margin-left: calc(var(--task-card-depth, 0) * 14px);
+    }
+
+    .task-card--row .task-card__status {
+      width: 22px;
+      height: 22px;
+      margin-top: 1px;
+    }
+
+    .task-card--row .priority-dot {
+      margin-top: 9px;
+    }
+
+    .task-card--row .task-card__title-row {
+      align-items: flex-start;
+      gap: var(--space-1);
+    }
+
+    .task-card--row .task-card__title {
+      white-space: normal;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      font-size: var(--text-base);
+      line-height: 1.35;
+    }
+
+    .task-card--row .task-card__due {
+      max-width: 38%;
+      justify-content: flex-end;
+      text-align: right;
+      font-size: var(--text-xs);
+      line-height: 1.3;
+      white-space: normal;
+    }
+
+    .task-card--row .task-card__meta-row {
+      gap: 4px;
+      font-size: var(--text-xs);
+    }
+
+    .task-card--row .chip,
+    .task-card--row .tag-chip,
+    .task-card--row .task-card__sub-count {
+      min-height: 20px;
+      font-size: var(--text-xs);
+    }
+
+    .task-card--row .task-card__actions {
+      align-self: center;
+      gap: 0;
     }
   }
 </style>

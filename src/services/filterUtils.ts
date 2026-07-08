@@ -72,6 +72,7 @@ export const isTaskSearchFilter = (value: unknown): value is TaskSearchFilter =>
 	}
 
 	if (value.showCompleted !== undefined && typeof value.showCompleted !== 'boolean') return false;
+	if (value.archived !== undefined && typeof value.archived !== 'boolean') return false;
 
 	return true;
 };
@@ -120,6 +121,7 @@ export const countActiveFilterFields = (filter: TaskSearchFilter | undefined): n
 	if (filter.status !== undefined) count += 1;
 	if (filter.priority !== undefined) count += 1;
 	if (filter.showCompleted !== undefined) count += 1;
+	if (filter.archived !== undefined) count += 1;
 	return count;
 };
 

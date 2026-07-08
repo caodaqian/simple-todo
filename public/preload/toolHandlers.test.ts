@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // toolHandlers.js is a CommonJS module (preload folder has type:commonjs).
 // Default import gives us its module.exports via vitest's CJS interop.
 import toolHandlers from './toolHandlers.js';
@@ -43,7 +43,7 @@ const {
 	shouldSpawnNextPure,
 	buildNextInstancePure,
 } = toolHandlers as {
-	STORAGE_KEYS: { TASKS: string; SETTINGS: string; TEMPLATES: string; UI_STATE: string };
+		STORAGE_KEYS: { TASKS: string; SETTINGS: string; TEMPLATES: string; UI_STATE: string; POMODORO: string; STICKY_NOTE: string };
 	STORAGE_KEY: string;
 	SETTINGS_STORAGE_KEY: string;
 	TEMPLATES_STORAGE_KEY: string;
@@ -95,7 +95,7 @@ interface ExportImportDeps {
 }
 
 interface NotifyDeps {
-	showNotification: (payload: { title: string; body?: string }) => void;
+	showNotification: (body: string, featureName?: string) => void;
 	settingsDb: DbStorage;
 }
 
@@ -155,6 +155,11 @@ describe('toolHandlers – pure logic', () => {
 			expect(readTasksFromDb(db)).toEqual([]);
 		});
 
+		it('returns empty array when storage does not contain an array', () => {
+			db.setItem(STORAGE_KEY, JSON.stringify({ id: 'not-an-array' }));
+			expect(readTasksFromDb(db)).toEqual([]);
+		});
+
 		it('returns empty array when storage contains invalid JSON', () => {
 			db.setItem(STORAGE_KEY, '{not json');
 			expect(readTasksFromDb(db)).toEqual([]);
@@ -206,6 +211,19 @@ describe('toolHandlers – pure logic', () => {
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
 			expect(stored[0]!.priority).toBe('medium');
 			expect(stored[0]!.tags).toEqual([]);
+		});
+
+		it('creates a child task when parent_task_id is provided', () => {
+			seedTask(db, { id: 'parent', title: '父任务' });
+			const result = createTaskHandler(db, { title: '子任务', parent_task_id: 'parent' }) as { parent_task_id?: string };
+
+			expect(result.parent_task_id).toBe('parent');
+			const stored = db.snapshot() as Array<Record<string, unknown>>;
+			expect(stored.find(t => t.title === '子任务')!.parentTaskId).toBe('parent');
+		});
+
+		it('throws when parent_task_id does not exist', () => {
+			expect(() => createTaskHandler(db, { title: '子任务', parent_task_id: 'missing' })).toThrow('未找到父任务: missing');
 		});
 	});
 
@@ -260,9 +278,10 @@ describe('toolHandlers – pure logic', () => {
 
 		it('formats due_date as ISO string', () => {
 			const ts = new Date('2026-07-01T10:00:00Z').getTime();
-			seedTask(db, { id: 'with-due', title: '带截止', dueDate: ts });
+			seedTask(db, { id: 'with-due', title: '带截止', dueDate: ts, parentTaskId: 'p1' });
 			const result = listTasksHandler(db, { keyword: '带截止' }) as { tasks: Array<Record<string, unknown>> };
 			expect(result.tasks[0]!.due_date).toBe(new Date(ts).toISOString());
+			expect(result.tasks[0]!.parent_task_id).toBe('p1');
 		});
 	});
 
@@ -314,6 +333,14 @@ describe('toolHandlers – pure logic', () => {
 			expect(t.description).toBe('原描述');
 		});
 
+		it('rejects invalid status, priority, and tags updates', () => {
+			seedTask(db, { id: 'u-invalid', title: '校验' });
+
+			expect(() => updateTaskHandler(db, { task_id: 'u-invalid', status: 'blocked' })).toThrow('任务状态无效');
+			expect(() => updateTaskHandler(db, { task_id: 'u-invalid', priority: 'critical' })).toThrow('任务优先级无效');
+			expect(() => updateTaskHandler(db, { task_id: 'u-invalid', tags: ['ok', 1] })).toThrow('tags 必须为字符串数组');
+		});
+
 		it('parses due_date and sets dueDate', () => {
 			seedTask(db, { id: 'u2', title: 't' });
 			updateTaskHandler(db, { task_id: 'u2', due_date: '2026-08-01T09:00:00+08:00' });
@@ -328,6 +355,28 @@ describe('toolHandlers – pure logic', () => {
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
 			const t = stored.find(x => x.id === 'u3')!;
 			expect(t).not.toHaveProperty('dueDate');
+		});
+
+		it('sets and clears parent_task_id', () => {
+			seedTask(db, { id: 'parent', title: '父' });
+			seedTask(db, { id: 'child', title: '子' });
+
+			const set = updateTaskHandler(db, { task_id: 'child', parent_task_id: 'parent' }) as { parent_task_id?: string };
+			expect(set.parent_task_id).toBe('parent');
+			expect((db.snapshot() as Array<Record<string, unknown>>).find(t => t.id === 'child')!.parentTaskId).toBe('parent');
+
+			const cleared = updateTaskHandler(db, { task_id: 'child', parent_task_id: null }) as { parent_task_id?: string };
+			expect(cleared.parent_task_id).toBeUndefined();
+			expect((db.snapshot() as Array<Record<string, unknown>>).find(t => t.id === 'child')).not.toHaveProperty('parentTaskId');
+		});
+
+		it('rejects invalid parent_task_id updates', () => {
+			seedTask(db, { id: 'parent', title: '父' });
+			seedTask(db, { id: 'child', title: '子', parentTaskId: 'parent' });
+
+			expect(() => updateTaskHandler(db, { task_id: 'parent', parent_task_id: 'parent' })).toThrow('任务不能设置自己为父任务');
+			expect(() => updateTaskHandler(db, { task_id: 'parent', parent_task_id: 'child' })).toThrow('不能将直接子任务设置为父任务');
+			expect(() => updateTaskHandler(db, { task_id: 'child', parent_task_id: 'missing' })).toThrow('未找到父任务: missing');
 		});
 	});
 
@@ -348,6 +397,16 @@ describe('toolHandlers – pure logic', () => {
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
 			expect(stored.map(t => t.id)).toEqual(['d2']);
 		});
+
+		it('deletes direct child tasks when deleting a parent task', () => {
+			seedTask(db, { id: 'parent', title: '父' });
+			seedTask(db, { id: 'child', title: '子', parentTaskId: 'parent' });
+			seedTask(db, { id: 'other', title: '其它' });
+
+			deleteTaskHandler(db, { task_id: 'parent' });
+
+			expect((db.snapshot() as Array<Record<string, unknown>>).map(t => t.id)).toEqual(['other']);
+		});
 	});
 
 	describe('todo_add_subtask', () => {
@@ -365,30 +424,30 @@ describe('toolHandlers – pure logic', () => {
 			expect(() => addSubtaskHandler(db, { task_id: 'nope', title: '子' })).toThrow('未找到任务: nope');
 		});
 
-		it('appends a subtask with completed=false and returns ids', () => {
+		it('creates a full child task with completed=false compatibility fields', () => {
 			seedTask(db, { id: 'p1', title: '父', subtasks: [] });
 			const result = addSubtaskHandler(db, { task_id: 'p1', title: '买牛奶' }) as {
-				task_id: string; subtask_id: string; title: string; completed: boolean;
+				task_id: string; subtask_id: string; title: string; completed: boolean; status: string; parent_task_id: string;
 			};
 			expect(result.task_id).toBe('p1');
 			expect(result.subtask_id).toBeTruthy();
 			expect(result.title).toBe('买牛奶');
 			expect(result.completed).toBe(false);
+			expect(result.status).toBe('todo');
+			expect(result.parent_task_id).toBe('p1');
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
-			const subtasks = (stored[0]!.subtasks as Array<Record<string, unknown>>);
-			expect(subtasks).toHaveLength(1);
-			expect(subtasks[0]!.title).toBe('买牛奶');
-			expect(subtasks[0]!.completed).toBe(false);
+			expect(stored).toHaveLength(2);
+			const child = stored.find(t => t.id === result.subtask_id)!;
+			expect(child.title).toBe('买牛奶');
+			expect(child.status).toBe('todo');
+			expect(child.parentTaskId).toBe('p1');
 		});
 	});
 
 	describe('todo_update_subtask', () => {
 		beforeEach(() => {
-			seedTask(db, {
-				id: 'p1', title: '父', subtasks: [
-					{ id: 's1', title: '旧标题', completed: false, createdAt: 1, updatedAt: 1 },
-				],
-			});
+			seedTask(db, { id: 'p1', title: '父', subtasks: [] });
+			seedTask(db, { id: 's1', title: '旧标题', status: 'todo', priority: 'medium', parentTaskId: 'p1' });
 		});
 
 		it('throws when task_id or subtask_id missing', () => {
@@ -406,9 +465,10 @@ describe('toolHandlers – pure logic', () => {
 
 		it('toggles completed', () => {
 			const r = updateSubtaskHandler(db, { task_id: 'p1', subtask_id: 's1', completed: true }) as {
-				completed: boolean; title: string;
+				completed: boolean; title: string; status: string;
 			};
 			expect(r.completed).toBe(true);
+			expect(r.status).toBe('done');
 			expect(r.title).toBe('旧标题');
 		});
 
@@ -419,8 +479,30 @@ describe('toolHandlers – pure logic', () => {
 			expect(r.title).toBe('新标题');
 			expect(r.completed).toBe(false);
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
-			const sub = (stored[0]!.subtasks as Array<Record<string, unknown>>)[0]!;
+			const sub = stored.find(t => t.id === 's1')!;
 			expect(sub.title).toBe('新标题');
+		});
+
+		it('updates full child task fields', () => {
+			const due = '2026-07-10T10:00:00Z';
+			const r = updateSubtaskHandler(db, {
+				task_id: 'p1',
+				subtask_id: 's1',
+				status: 'doing',
+				priority: 'urgent',
+				due_date: due,
+				tags: ['work'],
+				group: 'G',
+				description: '详情',
+			}) as { status: string; priority: string };
+
+			expect(r.status).toBe('doing');
+			expect(r.priority).toBe('urgent');
+			const sub = (db.snapshot() as Array<Record<string, unknown>>).find(t => t.id === 's1')!;
+			expect(sub.dueDate).toBe(new Date(due).getTime());
+			expect(sub.tags).toEqual(['work']);
+			expect(sub.group).toBe('G');
+			expect(sub.description).toBe('详情');
 		});
 
 		it('throws when title is empty string', () => {
@@ -430,12 +512,9 @@ describe('toolHandlers – pure logic', () => {
 
 	describe('todo_delete_subtask', () => {
 		beforeEach(() => {
-			seedTask(db, {
-				id: 'p1', title: '父', subtasks: [
-					{ id: 's1', title: 'a', completed: false, createdAt: 1, updatedAt: 1 },
-					{ id: 's2', title: 'b', completed: false, createdAt: 1, updatedAt: 1 },
-				],
-			});
+			seedTask(db, { id: 'p1', title: '父', subtasks: [] });
+			seedTask(db, { id: 's1', title: 'a', parentTaskId: 'p1' });
+			seedTask(db, { id: 's2', title: 'b', parentTaskId: 'p1' });
 		});
 
 		it('throws when ids missing', () => {
@@ -451,7 +530,7 @@ describe('toolHandlers – pure logic', () => {
 			const r = deleteSubtaskHandler(db, { task_id: 'p1', subtask_id: 's1' }) as { deleted: boolean };
 			expect(r.deleted).toBe(true);
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
-			expect((stored[0]!.subtasks as Array<Record<string, unknown>>).map(s => s.id)).toEqual(['s2']);
+			expect(stored.map(s => s.id)).toEqual(['p1', 's2']);
 		});
 	});
 
@@ -547,6 +626,8 @@ describe('toolHandlers – pure logic', () => {
 
 	describe('todo_get_overview', () => {
 		beforeEach(() => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-07-05T12:00:00+08:00'));
 			const now = Date.now();
 			const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
 			// 明日凌晨，确保晚于当前时间避免被算作逾期
@@ -554,6 +635,10 @@ describe('toolHandlers – pure logic', () => {
 			seedTask(db, { id: 'o1', title: '逾期', status: 'todo', priority: 'high', dueDate: now - 100000 });
 			seedTask(db, { id: 'o2', title: '明日', status: 'doing', priority: 'medium', dueDate: tomorrowStart });
 			seedTask(db, { id: 'o3', title: '无截止', status: 'done', priority: 'low' });
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
 		});
 
 		it('returns total and distributions', () => {
@@ -762,6 +847,19 @@ describe('toolHandlers – pure logic', () => {
 			expect(subs[0]!.completed).toBe(true);
 			expect(r.created_at).toBe(new Date(1000).toISOString());
 		});
+
+		it('returns parent_task_id and direct children', () => {
+			seedTask(db, { id: 'parent', title: '父', status: 'todo', priority: 'high' });
+			seedTask(db, { id: 'child', title: '子', status: 'doing', priority: 'urgent', parentTaskId: 'parent' });
+
+			const parent = getTaskHandler(db, { task_id: 'parent' }) as Record<string, unknown>;
+			const children = parent.children as Array<Record<string, unknown>>;
+			expect(children).toHaveLength(1);
+			expect(children[0]).toMatchObject({ id: 'child', title: '子', status: 'doing', priority: 'urgent' });
+
+			const child = getTaskHandler(db, { task_id: 'child' }) as Record<string, unknown>;
+			expect(child.parent_task_id).toBe('parent');
+		});
 	});
 
 	describe('todo_get_settings', () => {
@@ -777,11 +875,13 @@ describe('toolHandlers – pure logic', () => {
 				showCompleted: true,
 				defaultView: 'kanban',
 				notifyEnabled: false,
+				pomodoroMinutes: 55,
 			}));
 			const r = getSettingsHandler(db) as Record<string, unknown>;
 			expect(r.appearanceMode).toBe('dark');
 			expect(r.defaultView).toBe('kanban');
 			expect(r.notifyEnabled).toBe(false);
+			expect(r.pomodoroMinutes).toBe(55);
 		});
 
 		it('falls back to defaults for invalid enum values', () => {
@@ -794,6 +894,15 @@ describe('toolHandlers – pure logic', () => {
 			expect(r.appearanceMode).toBe(SETTINGS_DEFAULTS.appearanceMode);
 			expect(r.defaultView).toBe(SETTINGS_DEFAULTS.defaultView);
 			expect(r.notifyEnabled).toBe(SETTINGS_DEFAULTS.notifyEnabled);
+			expect(r.pomodoroMinutes).toBe(SETTINGS_DEFAULTS.pomodoroMinutes);
+		});
+
+		it('falls back to default pomodoro duration when invalid', () => {
+			db.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ pomodoroMinutes: 0 }));
+			expect((getSettingsHandler(db) as Record<string, unknown>).pomodoroMinutes).toBe(SETTINGS_DEFAULTS.pomodoroMinutes);
+
+			db.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ pomodoroMinutes: 241 }));
+			expect((getSettingsHandler(db) as Record<string, unknown>).pomodoroMinutes).toBe(SETTINGS_DEFAULTS.pomodoroMinutes);
 		});
 	});
 
@@ -871,15 +980,15 @@ describe('toolHandlers – pure logic', () => {
 
 		it('calls showNotification when notifyEnabled is true', () => {
 			db.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ notifyEnabled: true }));
-			let payload: { title: string; body?: string } | null = null;
+			let payload: { body: string; featureName?: string } | null = null;
 			const deps: NotifyDeps = {
-				showNotification(p) { payload = p; },
+				showNotification(body, featureName) { payload = { body, featureName }; },
 				settingsDb: db,
 			};
 			const r = notifyHandler({ title: '提醒', body: '正文' }, deps) as { notified: boolean };
 			expect(r.notified).toBe(true);
-			expect(payload!.title).toBe('提醒');
-			expect(payload!.body).toBe('正文');
+			expect(payload!.body).toBe('提醒：正文');
+			expect(payload!.featureName).toBe('todo');
 		});
 
 		it('defaults to notifyEnabled=true when settings missing', () => {
@@ -1156,6 +1265,8 @@ describe('toolHandlers – storage key consistency', () => {
 		expect(STORAGE_KEYS.SETTINGS).toBe('jianyue.settings');
 		expect(STORAGE_KEYS.TEMPLATES).toBe('jianyue.templates');
 		expect(STORAGE_KEYS.UI_STATE).toBe('jianyue.uiState');
+		expect(STORAGE_KEYS.POMODORO).toBe('jianyue.pomodoro');
+		expect(STORAGE_KEYS.STICKY_NOTE).toBe('jianyue.stickyNote');
 	});
 
 	it('derives legacy single-key constants from STORAGE_KEYS', () => {

@@ -1,5 +1,11 @@
 const fs = require('node:fs')
 const path = require('node:path')
+let ipcRenderer = null
+try {
+  ipcRenderer = require('electron').ipcRenderer
+} catch {
+  ipcRenderer = null
+}
 const {
   STORAGE_KEY,
   readTasksFromDb: readTasksFromDbPure,
@@ -66,6 +72,12 @@ function notifyTasksChanged() {
   } catch {
     /* ignore — notification is best-effort */
   }
+}
+
+if (ipcRenderer) {
+  ipcRenderer.on('jianyue:tasks-changed', function () {
+    notifyTasksChanged()
+  })
 }
 
 // Wrap a write-tool so it notifies the renderer on success.

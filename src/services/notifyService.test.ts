@@ -9,6 +9,8 @@ interface ShowNotificationOpts {
 	body: string;
 }
 
+type ShowNotificationCall = [body: string, clickFeatureCode?: string];
+
 class MockDbStorage {
 	private store = new Map<string, string>();
 
@@ -81,10 +83,11 @@ describe('notifyService.summarizeOnEnter', () => {
 		expect(showNotification).toHaveBeenCalledTimes(1);
 		const firstCall = showNotification.mock.calls[0];
 		expect(firstCall).toBeDefined();
-		const call = firstCall?.[0] as ShowNotificationOpts;
-		expect(call.title).toBe('简悦清单');
-		expect(call.body).toContain('今天 1 项');
-		expect(call.body).toContain('已过期 0 项');
+		const call = firstCall as ShowNotificationCall;
+		expect(call[0]).toContain('简悦清单');
+		expect(call[0]).toContain('今天 1 项');
+		expect(call[0]).toContain('已过期 0 项');
+		expect(call[1]).toBe('todo');
 	});
 
 	it('notifies with overdue count when overdue tasks exist', () => {
@@ -97,8 +100,15 @@ describe('notifyService.summarizeOnEnter', () => {
 		expect(showNotification).toHaveBeenCalledTimes(1);
 		const firstCall = showNotification.mock.calls[0];
 		expect(firstCall).toBeDefined();
-		const call = firstCall?.[0] as ShowNotificationOpts;
-		expect(call.body).toContain('已过期 2 项');
+		const call = firstCall as ShowNotificationCall;
+		expect(call[0]).toContain('已过期 2 项');
+		expect(call[1]).toBe('todo');
+	});
+
+	it('uses official uTools notification signature with click feature code', () => {
+		notifyService.notify('任务已完成', '写测试');
+		expect(showNotification).toHaveBeenCalledTimes(1);
+		expect(showNotification).toHaveBeenCalledWith('任务已完成：写测试', 'todo');
 	});
 
 	it('excludes done tasks from today count', () => {

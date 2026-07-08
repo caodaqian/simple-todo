@@ -3,6 +3,7 @@ export type TaskStatus = 'todo' | 'doing' | 'done';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 
 export interface Subtask {
+	/** @deprecated 子任务已迁移为带 parentTaskId 的完整 Task；此类型仅用于旧数据兼容。 */
 	id: string;
 	title: string;
 	completed: boolean;
@@ -26,6 +27,8 @@ export interface RepeatRule {
 
 export interface Task {
 	id: string;
+	/** 父任务 id；存在时当前任务是该父任务的直接子任务。 */
+	parentTaskId?: string;
 	title: string;
 	status: TaskStatus;
 	/** @deprecated 用 dueStart 替代；保留以兼容旧数据 */
@@ -40,6 +43,7 @@ export interface Task {
 	tags: string[];
 	group: string;
 	description: string;
+	/** @deprecated 子任务已迁移为扁平 Task；保留用于读取历史嵌套数据。 */
 	subtasks: Subtask[];
 	createdAt: number;
 	updatedAt: number;
@@ -51,6 +55,8 @@ export interface Task {
 	snoozedUntil?: number;
 	/** 重复规则；存在时任务标记 done 会自动生成下一实例 */
 	repeat?: RepeatRule;
+	/** 归档时间戳；存在时默认列表/筛选不显示，仅在归档视图展示。 */
+	archivedAt?: number;
 }
 
 export interface TaskTemplate {
@@ -70,8 +76,9 @@ export interface TaskTemplate {
 
 type TaskEditableFields = Omit<
 	Task,
-	'id' | 'createdAt' | 'updatedAt' | 'subtasks' | 'dueDate' | 'dueStart' | 'dueEnd' | 'allDay' | 'remindedAt'
+	'id' | 'parentTaskId' | 'createdAt' | 'updatedAt' | 'subtasks' | 'dueDate' | 'dueStart' | 'dueEnd' | 'allDay' | 'remindedAt'
 > & {
+	parentTaskId?: string | undefined;
 	dueDate?: number | undefined;
 	dueStart?: number | undefined;
 	dueEnd?: number | undefined;
@@ -79,6 +86,7 @@ type TaskEditableFields = Omit<
 	reminderOffset?: number | undefined;
 	snoozedUntil?: number | undefined;
 	repeat?: RepeatRule | undefined;
+	archivedAt?: number | undefined;
 	/** 允许在 update 时显式重置 remindedAt（写 undefined） */
 	remindedAt?: number | undefined;
 };
@@ -123,6 +131,7 @@ export interface TaskSearchFilter {
 	status?: TaskStatus | TaskStatus[];
 	priority?: TaskPriority | TaskPriority[];
 	showCompleted?: boolean;
+	archived?: boolean;
 }
 
 export type TaskSortField = 'priority' | 'dueDate' | 'createdAt' | 'updatedAt';

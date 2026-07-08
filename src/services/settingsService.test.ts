@@ -52,6 +52,7 @@ describe('settingsService', () => {
 		const settings = settingsService.getSettings();
 		expect(settings.appearanceMode).toBe(DEFAULT_SETTINGS.appearanceMode);
 		expect(settings.defaultView).toBe(DEFAULT_SETTINGS.defaultView);
+		expect(settings.pomodoroMinutes).toBe(40);
 		expect(settings.savedViews).toEqual([]);
 	});
 
@@ -69,6 +70,94 @@ describe('settingsService', () => {
 		expect(settings.savedViews).toEqual([]);
 		expect(settings.appearanceMode).toBe('dark');
 		expect(settings.defaultView).toBe('kanban');
+		expect(settings.pomodoroMinutes).toBe(40);
+	});
+
+	it('saves and retrieves custom pomodoro duration', () => {
+		settingsService.saveSettings({ ...DEFAULT_SETTINGS, pomodoroMinutes: 55 });
+		expect(settingsService.getSettings().pomodoroMinutes).toBe(55);
+	});
+
+	it('migrates display and window preferences to friendly defaults', () => {
+		dbStorage.setItem('jianyue.settings', JSON.stringify({
+			appearanceMode: 'light',
+			accentColor: 'blue',
+			showCompleted: false,
+			defaultView: 'list',
+			notifyEnabled: true,
+			pomodoroMinutes: 25,
+			savedViews: [],
+		}));
+
+		const settings = settingsService.getSettings();
+		expect(settings.fontScale).toBe(DEFAULT_SETTINGS.fontScale);
+		expect(settings.mainWindowHeightPreset).toBe(DEFAULT_SETTINGS.mainWindowHeightPreset);
+		expect(settings.stickyWindowSizePreset).toBe(DEFAULT_SETTINGS.stickyWindowSizePreset);
+		expect(settings.stickyWindowWidthPreset).toBe(DEFAULT_SETTINGS.stickyWindowWidthPreset);
+		expect(settings.stickyWindowHeightPreset).toBe(DEFAULT_SETTINGS.stickyWindowHeightPreset);
+		expect(settings.stickyWindowPositionPreset).toBe(DEFAULT_SETTINGS.stickyWindowPositionPreset);
+	});
+
+	it('saves and retrieves display and window preferences', () => {
+		settingsService.saveSettings({
+			...DEFAULT_SETTINGS,
+			fontScale: 'large',
+			mainWindowHeightPreset: 'immersive',
+			stickyWindowSizePreset: 'wide',
+			stickyWindowWidthPreset: 'extra-wide',
+			stickyWindowHeightPreset: 'tall',
+			stickyWindowPositionPreset: 'center',
+		});
+
+		const settings = settingsService.getSettings();
+		expect(settings.fontScale).toBe('large');
+		expect(settings.mainWindowHeightPreset).toBe('immersive');
+		expect(settings.stickyWindowSizePreset).toBe('wide');
+		expect(settings.stickyWindowWidthPreset).toBe('extra-wide');
+		expect(settings.stickyWindowHeightPreset).toBe('tall');
+		expect(settings.stickyWindowPositionPreset).toBe('center');
+	});
+
+	it('migrates legacy combined sticky size into separate width and height presets', () => {
+		dbStorage.setItem('jianyue.settings', JSON.stringify({
+			...DEFAULT_SETTINGS,
+			stickyWindowSizePreset: 'wide',
+			stickyWindowWidthPreset: undefined,
+			stickyWindowHeightPreset: undefined,
+		}));
+
+		const settings = settingsService.getSettings();
+		expect(settings.stickyWindowWidthPreset).toBe('wide');
+		expect(settings.stickyWindowHeightPreset).toBe('standard');
+	});
+
+	it('falls back to friendly defaults for invalid display and window preferences', () => {
+		dbStorage.setItem('jianyue.settings', JSON.stringify({
+			...DEFAULT_SETTINGS,
+			fontScale: 'tiny',
+			mainWindowHeightPreset: 'fullscreen',
+			stickyWindowSizePreset: 'huge',
+			stickyWindowWidthPreset: 'huge',
+			stickyWindowHeightPreset: 'huge',
+			stickyWindowPositionPreset: 'random',
+		}));
+
+		const settings = settingsService.getSettings();
+		expect(settings.fontScale).toBe(DEFAULT_SETTINGS.fontScale);
+		expect(settings.mainWindowHeightPreset).toBe(DEFAULT_SETTINGS.mainWindowHeightPreset);
+		expect(settings.stickyWindowSizePreset).toBe(DEFAULT_SETTINGS.stickyWindowSizePreset);
+		expect(settings.stickyWindowWidthPreset).toBe(DEFAULT_SETTINGS.stickyWindowWidthPreset);
+		expect(settings.stickyWindowHeightPreset).toBe(DEFAULT_SETTINGS.stickyWindowHeightPreset);
+		expect(settings.stickyWindowPositionPreset).toBe(DEFAULT_SETTINGS.stickyWindowPositionPreset);
+		expect(settings.pomodoroMinutes).toBe(DEFAULT_SETTINGS.pomodoroMinutes);
+	});
+
+	it('falls back to default pomodoro duration for invalid values', () => {
+		dbStorage.setItem('jianyue.settings', JSON.stringify({ ...DEFAULT_SETTINGS, pomodoroMinutes: -1 }));
+		expect(settingsService.getSettings().pomodoroMinutes).toBe(40);
+
+		dbStorage.setItem('jianyue.settings', JSON.stringify({ ...DEFAULT_SETTINGS, pomodoroMinutes: 500 }));
+		expect(settingsService.getSettings().pomodoroMinutes).toBe(40);
 	});
 
 	it('saves and retrieves a custom view with full filter snapshot', () => {

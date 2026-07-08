@@ -1,43 +1,44 @@
 <script lang="ts" setup>
   import { useTheme } from './composables/useTheme';
+  import { useWindowPreferences } from './composables/useWindowPreferences';
   useTheme();
+  const { applyMainWindowHeight } = useWindowPreferences();
 
-  import { onMounted, ref } from 'vue';
+  import { onMounted } from 'vue';
+  import StickyNoteWindow from './views/StickyNoteWindow/index.vue';
   import TodoHub from './views/TodoHub/index.vue';
 
-  interface UtoolsAction {
-    code?: string;
-  }
-
   interface UtoolsLike {
-    onPluginEnter?: (callback: (action: UtoolsAction) => void) => void;
-    onPluginOut?: (callback: () => void) => void;
+    onPluginEnter?: (callback: () => void) => void;
   }
 
-  const route = ref('todo');
-  const enterAction = ref<UtoolsAction>({});
-
+  const windowMode = new URLSearchParams(window.location.search).get('window');
+  const hasStickyInit = (): boolean => {
+    try {
+      const raw = window.sessionStorage.getItem('jianyue.sticky.init');
+      if (!raw) return false;
+      const parsed = JSON.parse(raw) as { type?: unknown };
+      return parsed.type === 'sticky-note';
+    } catch {
+      return false;
+    }
+  };
+  const isStickyWindow = windowMode === 'sticky-note' || hasStickyInit();
   onMounted(() => {
     const utools = (window as Window & { utools?: UtoolsLike }).utools;
     if (!utools) {
       return;
     }
 
-    utools.onPluginEnter?.((action) => {
-      route.value = action.code ?? 'todo';
-      enterAction.value = action;
-      console.log('onPluginEnter', action);
-      console.log('route', route.value);
-    });
-
-    utools.onPluginOut?.(() => {
-      route.value = '';
+    utools.onPluginEnter?.(() => {
+      applyMainWindowHeight();
     });
   });
 </script>
 
 <template>
-  <TodoHub></TodoHub>
+  <StickyNoteWindow v-if="isStickyWindow" />
+  <TodoHub v-else />
 </template>
 
 <style scoped></style>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import {
     AlarmClock,
+    Archive,
+    ArchiveRestore,
     Bookmark,
     Calendar,
     CalendarClock,
@@ -21,12 +23,15 @@ import {
     ListTree,
     MoreHorizontal,
     Pencil,
+    Pin,
     Play,
     Plus,
     RotateCcw,
     Settings,
+    Square,
     Star,
     Sun,
+    Timer,
     Trash2,
     X,
 } from 'lucide-vue-next';
@@ -52,6 +57,8 @@ const ICON_MAP: Record<string, Component> = {
   sun: Sun,
   clock: Clock,
   alarmClock: AlarmClock,
+  archive: Archive,
+  archiveRestore: ArchiveRestore,
   inbox: Inbox,
   check: Check,
   circle: Circle,
@@ -63,6 +70,7 @@ const ICON_MAP: Record<string, Component> = {
   x: X,
   trash2: Trash2,
   pencil: Pencil,
+  pin: Pin,
   moreHorizontal: MoreHorizontal,
   hash: Hash,
   folder: Folder,
@@ -77,6 +85,8 @@ const ICON_MAP: Record<string, Component> = {
   rotateCcw: RotateCcw,
   star: Star,
   filter: Filter,
+  timer: Timer,
+  square: Square,
 };
 
 const warned = new Set<string>();

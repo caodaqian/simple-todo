@@ -3,7 +3,7 @@ import { getTaskDateRules, isTaskDueToday, isTaskOverdue } from './searchService
 import { settingsService } from './settingsService';
 
 interface UtoolsNotification {
-	showNotification(opts: { title: string; body: string }): void;
+	showNotification(body: string, clickFeatureCode?: string): void;
 }
 
 interface UtoolsLike {
@@ -31,7 +31,7 @@ export const notify = (title: string, body: string): void => {
 	}
 
 	try {
-		showNotification({ title, body });
+		showNotification(body ? `${title}：${body}` : title, 'todo');
 	} catch {
 		// Notification failure should not affect main flow
 		console.debug('Unable to show utools notification');

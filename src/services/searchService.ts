@@ -182,18 +182,27 @@ export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[
 		status,
 		priority,
 		showCompleted = false,
+		archived,
 	} = filter;
 
 	const normalizedGroup = group ? normalizeText(group) : '';
 	const statusSet = normalizeStatuses(status);
 	const prioritySet = normalizePriorities(priority);
 
-	// When no explicit status filter is set and showCompleted is false, exclude done tasks
-	const source = (!statusSet && !showCompleted)
-		? tasks.filter((task) => task.status !== 'done')
-		: [...tasks];
+	// Default behavior hides archived tasks. Archived views opt in with archived=true.
+	const source = tasks.filter((task) => {
+		const isArchived = task.archivedAt !== undefined;
+		if (archived === true) return isArchived;
+		if (archived === false) return !isArchived;
+		return !isArchived;
+	});
 
 	return source.filter((task) => {
+		// When no explicit status filter is set and showCompleted is false, exclude done tasks.
+		if (!statusSet && !showCompleted && task.status === 'done') {
+			return false;
+		}
+
 		if (keyword && !matchesKeyword(task, keyword)) {
 			return false;
 		}

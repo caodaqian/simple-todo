@@ -56,8 +56,9 @@ const toRepeatRule = (value: unknown): RepeatRule | undefined => {
 
 type TaskDraft = Omit<
 	Task,
-	'dueDate' | 'dueStart' | 'dueEnd' | 'allDay' | 'reminderOffset' | 'remindedAt' | 'snoozedUntil' | 'repeat'
+	'parentTaskId' | 'dueDate' | 'dueStart' | 'dueEnd' | 'allDay' | 'reminderOffset' | 'remindedAt' | 'snoozedUntil' | 'repeat' | 'archivedAt'
 > & {
+	parentTaskId: string | undefined;
 	dueDate: number | undefined;
 	dueStart?: number | undefined;
 	dueEnd?: number | undefined;
@@ -66,11 +67,17 @@ type TaskDraft = Omit<
 	remindedAt?: number | undefined;
 	snoozedUntil?: number | undefined;
 	repeat?: RepeatRule | undefined;
+	archivedAt?: number | undefined;
 };
 
+type TaskSubtaskCompat = Task & Pick<Subtask, 'completed'>;
+
+const hasOwn = (value: object, key: PropertyKey): boolean => Object.prototype.hasOwnProperty.call(value, key);
+
 const buildTask = (task: TaskDraft): Task => {
-	const { dueDate, dueStart, dueEnd, allDay, reminderOffset, remindedAt, snoozedUntil, repeat, ...rest } = task;
+	const { parentTaskId, dueDate, dueStart, dueEnd, allDay, reminderOffset, remindedAt, snoozedUntil, repeat, archivedAt, ...rest } = task;
 	const result: Task = { ...rest } as Task;
+	if (parentTaskId !== undefined) result.parentTaskId = parentTaskId;
 	if (dueDate !== undefined) result.dueDate = dueDate;
 	if (dueStart !== undefined) result.dueStart = dueStart;
 	if (dueEnd !== undefined) result.dueEnd = dueEnd;
@@ -79,6 +86,7 @@ const buildTask = (task: TaskDraft): Task => {
 	if (remindedAt !== undefined) result.remindedAt = remindedAt;
 	if (snoozedUntil !== undefined) result.snoozedUntil = snoozedUntil;
 	if (repeat !== undefined) result.repeat = repeat;
+	if (archivedAt !== undefined) result.archivedAt = archivedAt;
 	return result;
 };
 
@@ -89,6 +97,7 @@ const toTask = (value: unknown): Task | null => {
 
 	const {
 		id,
+		parentTaskId,
 		title,
 		status,
 		dueDate,
@@ -106,9 +115,11 @@ const toTask = (value: unknown): Task | null => {
 		remindedAt,
 		snoozedUntil,
 		repeat,
+		archivedAt,
 	} = value;
 
 	if (typeof id !== 'string' || id.length === 0) return null;
+	if (parentTaskId !== undefined && (typeof parentTaskId !== 'string' || parentTaskId.length === 0)) return null;
 	if (typeof title !== 'string') return null;
 	if (!isTaskStatus(status)) return null;
 	if (dueDate !== undefined && !isTimestamp(dueDate)) return null;
@@ -126,6 +137,7 @@ const toTask = (value: unknown): Task | null => {
 	}
 	if (remindedAt !== undefined && !isTimestamp(remindedAt)) return null;
 	if (snoozedUntil !== undefined && !isTimestamp(snoozedUntil)) return null;
+	if (archivedAt !== undefined && !isTimestamp(archivedAt)) return null;
 	const repeatRule = repeat !== undefined ? toRepeatRule(repeat) : undefined;
 
 	const normalizedTags: string[] = [];
@@ -162,6 +174,7 @@ const toTask = (value: unknown): Task | null => {
 
 	return buildTask({
 		id,
+		parentTaskId,
 		title,
 		status,
 		dueDate,
@@ -179,6 +192,7 @@ const toTask = (value: unknown): Task | null => {
 		...(remindedAt !== undefined ? { remindedAt } : {}),
 		...(snoozedUntil !== undefined ? { snoozedUntil } : {}),
 		...(repeatRule !== undefined ? { repeat: repeatRule } : {}),
+		...(archivedAt !== undefined ? { archivedAt } : {}),
 	});
 };
 
@@ -221,7 +235,89 @@ const parseTasks = (raw: string): Task[] => {
 	}
 };
 
+interface TaskBackup {
+	createdAt: number;
+	tasks: Task[];
+}
+
+const parseTaskBackup = (raw: string): TaskBackup | null => {
+	const parsed = safeJsonParse(raw);
+	if (!isObjectRecord(parsed) || !isTimestamp(parsed.createdAt) || !Array.isArray(parsed.tasks)) {
+		return null;
+	}
+
+	const tasks: Task[] = [];
+	for (const item of parsed.tasks) {
+		const task = toTask(item);
+		if (!task) {
+			return null;
+		}
+		tasks.push(task);
+	}
+
+	return { createdAt: parsed.createdAt, tasks };
+};
+
 const cloneSubtasks = (subtasks: Subtask[] = []): Subtask[] => subtasks.map((subtask) => ({ ...subtask }));
+
+const cloneTask = (task: Task): Task => ({
+	...task,
+	tags: [...task.tags],
+	subtasks: cloneSubtasks(task.subtasks),
+});
+
+const withArchivedState = (task: Task, archivedAt: number | undefined, now: number): Task => {
+	const next: Task = {
+		...task,
+		tags: [...task.tags],
+		subtasks: cloneSubtasks(task.subtasks),
+		updatedAt: now,
+	};
+	if (archivedAt === undefined) {
+		Reflect.deleteProperty(next, 'archivedAt');
+	} else {
+		next.archivedAt = archivedAt;
+	}
+	return next;
+};
+
+const migrateLegacySubtasks = (tasks: Task[]): { tasks: Task[]; migrated: boolean } => {
+	let migrated = false;
+	const nextTasks: Task[] = [];
+
+	for (const task of tasks) {
+		if (task.subtasks.length === 0) {
+			nextTasks.push(cloneTask(task));
+			continue;
+		}
+
+		migrated = true;
+		nextTasks.push({
+			...task,
+			tags: [...task.tags],
+			subtasks: [],
+		});
+
+		for (const subtask of task.subtasks) {
+			nextTasks.push(buildTask({
+				id: subtask.id,
+				parentTaskId: task.id,
+				title: subtask.title,
+				status: subtask.completed ? 'done' : 'todo',
+				dueDate: undefined,
+				priority: task.priority,
+				tags: [...task.tags],
+				group: task.group,
+				description: '',
+				subtasks: [],
+				createdAt: subtask.createdAt,
+				updatedAt: subtask.updatedAt,
+			}));
+		}
+	}
+
+	return { tasks: nextTasks, migrated };
+};
 
 const generateTaskId = (): string => {
 	const timestamp = Date.now().toString(36);
@@ -230,25 +326,31 @@ const generateTaskId = (): string => {
 };
 
 const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task => {
-	const dueDate = Object.prototype.hasOwnProperty.call(input, 'dueDate')
+	const parentTaskId = hasOwn(input, 'parentTaskId')
+		? input.parentTaskId
+		: existing?.parentTaskId;
+	const dueDate = hasOwn(input, 'dueDate')
 		? input.dueDate
 		: existing?.dueDate;
-	const dueStart = Object.prototype.hasOwnProperty.call(input, 'dueStart')
+	const dueStart = hasOwn(input, 'dueStart')
 		? input.dueStart
 		: existing?.dueStart;
-	const dueEnd = Object.prototype.hasOwnProperty.call(input, 'dueEnd')
+	const dueEnd = hasOwn(input, 'dueEnd')
 		? input.dueEnd
 		: existing?.dueEnd;
-	const allDay = Object.prototype.hasOwnProperty.call(input, 'allDay')
+	const allDay = hasOwn(input, 'allDay')
 		? input.allDay
 		: existing?.allDay;
+	const archivedAt = hasOwn(input, 'archivedAt')
+		? input.archivedAt
+		: existing?.archivedAt;
 
 	// remindedAt: 输入显式提供则用输入（含 undefined 重置），否则若关键字段（due*/reminderOffset）变更则重置
-	const inputHasRemindedAt = Object.prototype.hasOwnProperty.call(input, 'remindedAt');
-	const inputHasReminderOffset = Object.prototype.hasOwnProperty.call(input, 'reminderOffset');
-	const inputHasDueDate = Object.prototype.hasOwnProperty.call(input, 'dueDate');
-	const inputHasDueStart = Object.prototype.hasOwnProperty.call(input, 'dueStart');
-	const inputHasDueEnd = Object.prototype.hasOwnProperty.call(input, 'dueEnd');
+	const inputHasRemindedAt = hasOwn(input, 'remindedAt');
+	const inputHasReminderOffset = hasOwn(input, 'reminderOffset');
+	const inputHasDueDate = hasOwn(input, 'dueDate');
+	const inputHasDueStart = hasOwn(input, 'dueStart');
+	const inputHasDueEnd = hasOwn(input, 'dueEnd');
 	const reminderOrDueChanged = inputHasReminderOffset || inputHasDueDate || inputHasDueStart || inputHasDueEnd;
 	const remindedAt = inputHasRemindedAt
 		? input.remindedAt
@@ -258,6 +360,7 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 
 	const payload: TaskDraft = {
 		id: input.id ?? existing?.id ?? generateTaskId(),
+		parentTaskId,
 		title: input.title,
 		status: input.status,
 		dueDate,
@@ -282,32 +385,92 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 	if (remindedAt !== undefined) payload.remindedAt = remindedAt;
 	if (input.snoozedUntil !== undefined) payload.snoozedUntil = input.snoozedUntil;
 	else if (existing?.snoozedUntil !== undefined) payload.snoozedUntil = existing.snoozedUntil;
-	const inputHasRepeat = Object.prototype.hasOwnProperty.call(input, 'repeat');
+	const inputHasRepeat = hasOwn(input, 'repeat');
 	if (inputHasRepeat && input.repeat !== undefined) payload.repeat = input.repeat;
 	else if (!inputHasRepeat && existing?.repeat !== undefined) payload.repeat = existing.repeat;
+	if (archivedAt !== undefined) payload.archivedAt = archivedAt;
 	return buildTask(payload);
 };
 
 class TaskService {
 	private readonly storageKey = STORAGE_KEYS.TASKS;
+	private readonly backupStorageKey = STORAGE_KEYS.TASKS_BACKUP;
 
 	private memoryTasks: Task[] = [];
+	private memoryBackup: string | null = null;
 
 	getAll(): Task[] {
 		const raw = this.readFromStorage();
 
 		if (raw === null) {
-			return [...this.memoryTasks];
+			const migration = migrateLegacySubtasks(this.memoryTasks);
+			if (migration.migrated) {
+				this.memoryTasks = migration.tasks;
+			}
+			return [...migration.tasks];
 		}
 
-		const tasks = parseTasks(raw);
-		this.memoryTasks = tasks;
-		return [...tasks];
+		const migration = migrateLegacySubtasks(parseTasks(raw));
+		this.memoryTasks = migration.tasks;
+		if (migration.migrated) {
+			this.saveAll(migration.tasks);
+		}
+		return [...migration.tasks];
 	}
 
 	getById(taskId: string): Task | null {
 		const task = this.getAll().find((item) => item.id === taskId);
 		return task ?? null;
+	}
+
+	getChildTasks(parentTaskId: string): Task[] {
+		return this.getAll().filter((task) => task.parentTaskId === parentTaskId);
+	}
+
+	getParentTask(task: Task): Task | null {
+		if (!task.parentTaskId) {
+			return null;
+		}
+		return this.getById(task.parentTaskId);
+	}
+
+	getTasksInParentOrder(tasks: Task[] = this.getAll()): Task[] {
+		const source = tasks.map(cloneTask);
+		const taskIds = new Set(source.map((task) => task.id));
+		const childTasksByParent = new Map<string, Task[]>();
+		const appendedIds = new Set<string>();
+		const ordered: Task[] = [];
+
+		for (const task of source) {
+			if (!task.parentTaskId) {
+				continue;
+			}
+			const siblings = childTasksByParent.get(task.parentTaskId) ?? [];
+			siblings.push(task);
+			childTasksByParent.set(task.parentTaskId, siblings);
+		}
+
+		for (const task of source) {
+			if (task.parentTaskId) {
+				continue;
+			}
+			ordered.push(task);
+			appendedIds.add(task.id);
+			for (const child of childTasksByParent.get(task.id) ?? []) {
+				ordered.push(child);
+				appendedIds.add(child.id);
+			}
+		}
+
+		for (const task of source) {
+			if (!task.parentTaskId || appendedIds.has(task.id) || taskIds.has(task.parentTaskId)) {
+				continue;
+			}
+			ordered.push(task);
+			appendedIds.add(task.id);
+		}
+
+		return ordered;
 	}
 
 	/** 聚合所有任务用过的标签，按出现频次降序、名称升序稳定排序 */
@@ -385,46 +548,72 @@ class TaskService {
 			subtasks: updates.subtasks ? cloneSubtasks(updates.subtasks) : cloneSubtasks(current.subtasks),
 			createdAt: current.createdAt,
 			updatedAt: current.updatedAt,
-			...(Object.prototype.hasOwnProperty.call(updates, 'dueDate')
+			...(hasOwn(updates, 'parentTaskId')
+				? { parentTaskId: updates.parentTaskId }
+				: current.parentTaskId === undefined
+					? {}
+					: { parentTaskId: current.parentTaskId }),
+			...(hasOwn(updates, 'dueDate')
 				? { dueDate: updates.dueDate }
 				: current.dueDate === undefined
 					? {}
 					: { dueDate: current.dueDate }),
-			...(Object.prototype.hasOwnProperty.call(updates, 'dueStart')
+			...(hasOwn(updates, 'dueStart')
 				? { dueStart: updates.dueStart }
 				: current.dueStart === undefined
 					? {}
 					: { dueStart: current.dueStart }),
-			...(Object.prototype.hasOwnProperty.call(updates, 'dueEnd')
+			...(hasOwn(updates, 'dueEnd')
 				? { dueEnd: updates.dueEnd }
 				: current.dueEnd === undefined
 					? {}
 					: { dueEnd: current.dueEnd }),
-			...(Object.prototype.hasOwnProperty.call(updates, 'allDay')
+			...(hasOwn(updates, 'allDay')
 				? { allDay: updates.allDay }
 				: current.allDay === undefined
 					? {}
 					: { allDay: current.allDay }),
-			...(Object.prototype.hasOwnProperty.call(updates, 'reminderOffset')
+			...(hasOwn(updates, 'reminderOffset')
 				? { reminderOffset: updates.reminderOffset }
 				: current.reminderOffset === undefined
 					? {}
 					: { reminderOffset: current.reminderOffset }),
-			...(Object.prototype.hasOwnProperty.call(updates, 'remindedAt')
+			...(hasOwn(updates, 'remindedAt')
 				? { remindedAt: updates.remindedAt }
 				: {}),
-			...(Object.prototype.hasOwnProperty.call(updates, 'snoozedUntil')
+			...(hasOwn(updates, 'snoozedUntil')
 				? { snoozedUntil: updates.snoozedUntil }
 				: current.snoozedUntil === undefined
 					? {}
 					: { snoozedUntil: current.snoozedUntil }),
-			...(Object.prototype.hasOwnProperty.call(updates, 'repeat')
+			...(hasOwn(updates, 'repeat')
 				? { repeat: updates.repeat }
 				: current.repeat === undefined
 					? {}
 					: { repeat: current.repeat }),
+			...(hasOwn(updates, 'archivedAt')
+				? { archivedAt: updates.archivedAt }
+				: current.archivedAt === undefined
+					? {}
+					: { archivedAt: current.archivedAt }),
 		};
 		return this.saveTask(updateInput);
+	}
+
+	archive(taskId: string): Task | null {
+		return this.setArchived(taskId, Date.now());
+	}
+
+	unarchive(taskId: string): Task | null {
+		return this.setArchived(taskId, undefined);
+	}
+
+	bulkArchive(taskIds: string[]): number {
+		return this.bulkSetArchived(taskIds, Date.now());
+	}
+
+	bulkUnarchive(taskIds: string[]): number {
+		return this.bulkSetArchived(taskIds, undefined);
 	}
 
 	exportTasks(): string {
@@ -457,15 +646,14 @@ class TaskService {
 			}
 
 			nextTasks.push({
-				...task,
-				tags: [...task.tags],
-				subtasks: cloneSubtasks(task.subtasks),
+				...cloneTask(task),
 			});
 			existingIds.add(task.id);
 			importedCount += 1;
 		}
 
 		if (importedCount > 0) {
+			this.saveBackup(currentTasks);
 			this.saveAll(nextTasks);
 		}
 
@@ -473,85 +661,74 @@ class TaskService {
 	}
 
 	replaceAll(tasks: Task[]): void {
-		this.saveAll(tasks.map((task) => ({ ...task, tags: [...task.tags], subtasks: cloneSubtasks(task.subtasks) })));
+		this.saveBackup(this.getAll());
+		this.saveAll(tasks.map(cloneTask));
+	}
+
+	hasBackup(): boolean {
+		return this.readBackup() !== null;
+	}
+
+	restoreLatestBackup(): boolean {
+		const backup = this.readBackup();
+		if (!backup) {
+			return false;
+		}
+
+		this.saveAll(backup.tasks.map(cloneTask));
+		return true;
 	}
 
 	delete(taskId: string): boolean {
 		const tasks = this.getAll();
-		const next = tasks.filter((task) => task.id !== taskId);
+		const next = tasks.filter((task) => task.id !== taskId && task.parentTaskId !== taskId);
 
 		if (next.length === tasks.length) {
 			return false;
 		}
 
+		this.saveBackup(tasks);
 		this.saveAll(next);
 		return true;
 	}
 
-	addSubtask(taskId: string, title: string): Subtask | null {
+	addSubtask(taskId: string, title: string): TaskSubtaskCompat | null {
 		const task = this.getById(taskId);
 		if (!task) {
 			return null;
 		}
 
-		const now = Date.now();
-		const subtask: Subtask = {
-			id: generateTaskId(),
+		const child = this.saveTask({
 			title,
-			completed: false,
-			createdAt: now,
-			updatedAt: now,
-		};
-
-		const updated = this.update(taskId, {
-			subtasks: [...task.subtasks, subtask],
+			status: 'todo',
+			priority: task.priority,
+			tags: [...task.tags],
+			group: task.group,
+			description: '',
+			subtasks: [],
+			parentTaskId: task.id,
 		});
 
-		return updated ? subtask : null;
+		return { ...child, completed: false };
 	}
 
 	updateSubtask(taskId: string, subtaskId: string, completed: boolean): boolean {
-		const task = this.getById(taskId);
-		if (!task) {
+		const child = this.getAll().find((task) => task.id === subtaskId && task.parentTaskId === taskId);
+		if (!child) {
 			return false;
 		}
 
-		let found = false;
-		const now = Date.now();
-
-		const subtasks = task.subtasks.map((subtask) => {
-			if (subtask.id !== subtaskId) {
-				return subtask;
-			}
-
-			found = true;
-			return {
-				...subtask,
-				completed,
-				updatedAt: now,
-			};
-		});
-
-		if (!found) {
-			return false;
-		}
-
-		return this.update(taskId, { subtasks }) !== null;
+		return this.update(child.id, { status: completed ? 'done' : 'todo' }) !== null;
 	}
 
 	deleteSubtask(taskId: string, subtaskId: string): boolean {
-		const task = this.getById(taskId);
-		if (!task) {
+		const tasks = this.getAll();
+		if (!tasks.some((task) => task.id === subtaskId && task.parentTaskId === taskId)) {
 			return false;
 		}
 
-		const subtasks = task.subtasks.filter((subtask) => subtask.id !== subtaskId);
-
-		if (subtasks.length === task.subtasks.length) {
-			return false;
-		}
-
-		return this.update(taskId, { subtasks }) !== null;
+		this.saveAll(tasks.filter((task) => task.id !== subtaskId));
+		return true;
 	}
 
 	changeStatus(taskId: string, status: TaskStatus): Task | null {
@@ -628,10 +805,55 @@ class TaskService {
 		const removed = tasks.length - next.length;
 
 		if (removed > 0) {
+			this.saveBackup(tasks);
 			this.saveAll(next);
 		}
 
 		return removed;
+	}
+
+	private setArchived(taskId: string, archivedAt: number | undefined): Task | null {
+		const tasks = this.getAll();
+		const index = tasks.findIndex((task) => task.id === taskId);
+		if (index === -1) {
+			return null;
+		}
+
+		const now = Date.now();
+		const current = tasks[index]!;
+		const next = withArchivedState(current, archivedAt, now);
+
+		tasks[index] = next;
+		this.saveAll(tasks);
+		return next;
+	}
+
+	private bulkSetArchived(taskIds: string[], archivedAt: number | undefined): number {
+		if (taskIds.length === 0) {
+			return 0;
+		}
+
+		const idSet = new Set(taskIds);
+		const now = Date.now();
+		const tasks = this.getAll();
+		let count = 0;
+
+		for (let i = 0; i < tasks.length; i += 1) {
+			const task = tasks[i];
+			if (!task || !idSet.has(task.id)) {
+				continue;
+			}
+
+			const next = withArchivedState(task, archivedAt, now);
+			tasks[i] = next;
+			count += 1;
+		}
+
+		if (count > 0) {
+			this.saveAll(tasks);
+		}
+
+		return count;
 	}
 
 	private getDbStorage(): UtoolsDbStorage | null {
@@ -647,16 +869,44 @@ class TaskService {
 	}
 
 	private readFromStorage(): string | null {
+		return this.readStorage(this.storageKey);
+	}
+
+	private readStorage(key: string): string | null {
 		const dbStorage = this.getDbStorage();
 		if (!dbStorage) {
-			return null;
+			return key === this.backupStorageKey ? this.memoryBackup : null;
 		}
 
 		try {
-			const value = dbStorage.getItem(this.storageKey);
+			const value = dbStorage.getItem(key);
 			return typeof value === 'string' ? value : null;
 		} catch {
 			return null;
+		}
+	}
+
+	private readBackup(): TaskBackup | null {
+		const raw = this.readStorage(this.backupStorageKey);
+		return raw === null ? null : parseTaskBackup(raw);
+	}
+
+	private saveBackup(tasks: Task[]): void {
+		const backup = JSON.stringify({
+			createdAt: Date.now(),
+			tasks: tasks.map(cloneTask),
+		});
+		this.memoryBackup = backup;
+
+		const dbStorage = this.getDbStorage();
+		if (!dbStorage) {
+			return;
+		}
+
+		try {
+			dbStorage.setItem(this.backupStorageKey, backup);
+		} catch {
+			// Gracefully fall back to memory storage when dbStorage fails.
 		}
 	}
 

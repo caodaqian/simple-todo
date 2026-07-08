@@ -1,5 +1,17 @@
 import { ref, type Ref } from 'vue';
-import type { AccentColor, AppSettings, AppearanceMode, SavedFilterView, TodoView } from '../types/settings';
+import type {
+	AccentColor,
+	AppSettings,
+	AppearanceMode,
+	FontScale,
+	MainWindowHeightPreset,
+	SavedFilterView,
+	StickyWindowHeightPreset,
+	StickyWindowPositionPreset,
+	StickyWindowSizePreset,
+	StickyWindowWidthPreset,
+	TodoView,
+} from '../types/settings';
 import { ACCENT_COLORS, DEFAULT_SETTINGS } from '../types/settings';
 import type { TaskSearchFilter } from '../types/task';
 import { isSortOption, isTaskSearchFilter } from './filterUtils';
@@ -28,6 +40,51 @@ const isTodoView = (value: unknown): value is TodoView => {
 
 const isAccentColor = (value: unknown): value is AccentColor => {
 	return ACCENT_COLORS.includes(value as AccentColor);
+};
+
+const isFontScale = (value: unknown): value is FontScale => {
+	return value === 'compact' || value === 'standard' || value === 'comfortable' || value === 'large';
+};
+
+const isMainWindowHeightPreset = (value: unknown): value is MainWindowHeightPreset => {
+	return value === 'compact' || value === 'standard' || value === 'spacious' || value === 'immersive';
+};
+
+const isStickyWindowSizePreset = (value: unknown): value is StickyWindowSizePreset => {
+	return value === 'compact' || value === 'standard' || value === 'wide' || value === 'tall';
+};
+
+const isStickyWindowWidthPreset = (value: unknown): value is StickyWindowWidthPreset => {
+	return value === 'narrow' || value === 'standard' || value === 'wide' || value === 'extra-wide';
+};
+
+const isStickyWindowHeightPreset = (value: unknown): value is StickyWindowHeightPreset => {
+	return value === 'compact' || value === 'standard' || value === 'tall' || value === 'extra-tall';
+};
+
+const isStickyWindowPositionPreset = (value: unknown): value is StickyWindowPositionPreset => {
+	return value === 'auto' || value === 'top-left' || value === 'top-right' || value === 'center' || value === 'bottom-right';
+};
+
+const legacySizeToWidthPreset = (value: unknown): StickyWindowWidthPreset => {
+	if (value === 'compact') return 'narrow';
+	if (value === 'wide') return 'wide';
+	return DEFAULT_SETTINGS.stickyWindowWidthPreset;
+};
+
+const legacySizeToHeightPreset = (value: unknown): StickyWindowHeightPreset => {
+	if (value === 'compact') return 'compact';
+	if (value === 'tall') return 'tall';
+	return DEFAULT_SETTINGS.stickyWindowHeightPreset;
+};
+
+const normalizePomodoroMinutes = (value: unknown): number => {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return DEFAULT_SETTINGS.pomodoroMinutes;
+	}
+
+	const minutes = Math.trunc(value);
+	return minutes >= 1 && minutes <= 240 ? minutes : DEFAULT_SETTINGS.pomodoroMinutes;
 };
 
 const migrateLegacyView = (value: Record<string, unknown>): SavedFilterView | null => {
@@ -118,6 +175,24 @@ const parseSettings = (raw: string): AppSettings => {
 			accentColor: isAccentColor(parsed.accentColor)
 				? parsed.accentColor
 				: DEFAULT_SETTINGS.accentColor,
+			fontScale: isFontScale(parsed.fontScale)
+				? parsed.fontScale
+				: DEFAULT_SETTINGS.fontScale,
+			mainWindowHeightPreset: isMainWindowHeightPreset(parsed.mainWindowHeightPreset)
+				? parsed.mainWindowHeightPreset
+				: DEFAULT_SETTINGS.mainWindowHeightPreset,
+			stickyWindowSizePreset: isStickyWindowSizePreset(parsed.stickyWindowSizePreset)
+				? parsed.stickyWindowSizePreset
+				: DEFAULT_SETTINGS.stickyWindowSizePreset,
+			stickyWindowWidthPreset: isStickyWindowWidthPreset(parsed.stickyWindowWidthPreset)
+				? parsed.stickyWindowWidthPreset
+				: legacySizeToWidthPreset(parsed.stickyWindowSizePreset),
+			stickyWindowHeightPreset: isStickyWindowHeightPreset(parsed.stickyWindowHeightPreset)
+				? parsed.stickyWindowHeightPreset
+				: legacySizeToHeightPreset(parsed.stickyWindowSizePreset),
+			stickyWindowPositionPreset: isStickyWindowPositionPreset(parsed.stickyWindowPositionPreset)
+				? parsed.stickyWindowPositionPreset
+				: DEFAULT_SETTINGS.stickyWindowPositionPreset,
 			// Support migration: read showCompleted; ignore legacy includeHidden
 			showCompleted:
 				typeof parsed.showCompleted === 'boolean'
@@ -127,6 +202,7 @@ const parseSettings = (raw: string): AppSettings => {
 				? parsed.defaultView
 				: DEFAULT_SETTINGS.defaultView,
 			notifyEnabled,
+			pomodoroMinutes: normalizePomodoroMinutes(parsed.pomodoroMinutes),
 			savedViews: parseSavedViews(parsed.savedViews),
 		};
 	} catch {

@@ -33,9 +33,14 @@
             "enum": [
               "low",
               "medium",
-              "high"
+              "high",
+              "urgent"
             ],
-            "description": "优先级：low=低，medium=中，high=高"
+            "description": "优先级：low=低，medium=中，high=高，urgent=紧急"
+          },
+          "parent_task_id": {
+            "type": "string",
+            "description": "父任务 ID；传入后创建为该任务的子任务"
           },
           "due_date": {
             "type": "string",
@@ -141,7 +146,8 @@
             "enum": [
               "low",
               "medium",
-              "high"
+              "high",
+              "urgent"
             ],
             "description": "按优先级筛选"
           },
@@ -187,6 +193,9 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "parent_task_id": {
+                  "type": "string"
                 }
               }
             }
@@ -264,9 +273,17 @@
             "enum": [
               "low",
               "medium",
-              "high"
+              "high",
+              "urgent"
             ],
             "description": "新优先级"
+          },
+          "parent_task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "设置父任务 ID；传 null 清除父任务"
           },
           "due_date": {
             "type": "string",
@@ -406,6 +423,15 @@
           },
           "completed": {
             "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "parent_task_id": {
+            "type": "string"
           }
         },
         "required": [
@@ -417,7 +443,7 @@
       }
     },
     "todo_update_subtask": {
-      "description": "更新子任务的完成状态或标题（至少提供 completed 或 title 之一）",
+      "description": "更新子任务的完成状态、标题或完整任务属性（至少提供一个可更新字段）",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -437,6 +463,44 @@
           "title": {
             "type": "string",
             "description": "新标题"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "todo",
+              "doing",
+              "done"
+            ],
+            "description": "新状态"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "urgent"
+            ],
+            "description": "新优先级"
+          },
+          "due_date": {
+            "type": "string",
+            "description": "新截止时间，ISO 8601 格式；非法值会清除截止时间"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "新标签列表（覆盖）"
+          },
+          "group": {
+            "type": "string",
+            "description": "新分组"
+          },
+          "description": {
+            "type": "string",
+            "description": "新描述（Markdown）"
           }
         },
         "required": [
@@ -457,6 +521,15 @@
             "type": "boolean"
           },
           "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "parent_task_id": {
             "type": "string"
           }
         },
@@ -529,7 +602,8 @@
               "enum": [
                 "low",
                 "medium",
-                "high"
+                "high",
+                "urgent"
               ]
             },
             "description": "按优先级筛选，可传单值或数组"
@@ -631,6 +705,9 @@
                 },
                 "description": {
                   "type": "string"
+                },
+                "parent_task_id": {
+                  "type": "string"
                 }
               }
             }
@@ -695,6 +772,9 @@
                 "type": "number"
               },
               "high": {
+                "type": "number"
+              },
+              "urgent": {
                 "type": "number"
               }
             }
@@ -808,6 +888,9 @@
           "id": {
             "type": "string"
           },
+          "parent_task_id": {
+            "type": "string"
+          },
           "title": {
             "type": "string"
           },
@@ -850,6 +933,29 @@
                   "type": "string"
                 },
                 "updated_at": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "priority": {
+                  "type": "string"
+                },
+                "due_date": {
                   "type": "string"
                 }
               }
@@ -1038,7 +1144,8 @@
             "enum": [
               "low",
               "medium",
-              "high"
+              "high",
+              "urgent"
             ],
             "description": "新优先级"
           },
@@ -1124,7 +1231,8 @@
             "enum": [
               "low",
               "medium",
-              "high"
+              "high",
+              "urgent"
             ],
             "description": "预设优先级，默认 medium"
           },

@@ -8,6 +8,8 @@ const STORAGE_KEYS = {
 	SETTINGS: 'jianyue.settings',
 	TEMPLATES: 'jianyue.templates',
 	UI_STATE: 'jianyue.uiState',
+	POMODORO: 'jianyue.pomodoro',
+	STICKY_NOTE: 'jianyue.stickyNote',
 };
 
 const STORAGE_KEY = STORAGE_KEYS.TASKS;
@@ -16,7 +18,8 @@ function readTasksFromDb(dbStorage) {
 	try {
 		const raw = dbStorage.getItem(STORAGE_KEY);
 		if (typeof raw !== 'string') return [];
-		return JSON.parse(raw);
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) ? parsed : [];
 	} catch {
 		return [];
 	}
@@ -38,6 +41,62 @@ function generateId() {
 
 function findTaskById(tasks, id) {
 	return tasks.find(function (t) { return t.id === id }) || null;
+}
+
+function hasOwn(value, key) {
+	return !!value && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function isTaskPriority(value) {
+	return value === 'low' || value === 'medium' || value === 'high' || value === 'urgent';
+}
+
+function isTaskStatus(value) {
+	return value === 'todo' || value === 'doing' || value === 'done';
+}
+
+function getDirectChildren(tasks, parentTaskId) {
+	return tasks.filter(function (t) { return t.parentTaskId === parentTaskId });
+}
+
+function assertValidParentTask(tasks, parentTaskId, selfTaskId) {
+	if (parentTaskId === undefined || parentTaskId === null) return undefined;
+	if (typeof parentTaskId !== 'string' || !parentTaskId.trim()) {
+		throw new Error('parent_task_id 必须为非空字符串或 null');
+	}
+	if (selfTaskId && parentTaskId === selfTaskId) {
+		throw new Error('任务不能设置自己为父任务');
+	}
+	const parent = findTaskById(tasks, parentTaskId);
+	if (!parent) throw new Error('未找到父任务: ' + parentTaskId);
+	if (selfTaskId && parent.parentTaskId === selfTaskId) {
+		throw new Error('不能将直接子任务设置为父任务');
+	}
+	return parentTaskId;
+}
+
+function toTaskListOutput(t) {
+	return {
+		id: t.id,
+		title: t.title,
+		status: t.status,
+		priority: t.priority,
+		due_date: formatDate(t.dueDate),
+		tags: t.tags || [],
+		group: t.group || '',
+		description: t.description || '',
+		parent_task_id: t.parentTaskId,
+	};
+}
+
+function toChildOutput(t) {
+	return {
+		id: t.id,
+		title: t.title,
+		status: t.status,
+		priority: t.priority,
+		due_date: formatDate(t.dueDate),
+	};
 }
 
 function formatDate(ts) {
@@ -64,12 +123,14 @@ function createTaskHandler(dbStorage, params) {
 		throw new Error('设置提醒需要先有截止日期');
 	}
 	const repeat = normalizeRepeatRule(params.repeat);
+	const tasks = readTasksFromDb(dbStorage);
+	const parentTaskId = assertValidParentTask(tasks, params.parent_task_id);
 	const task = {
 		id: generateId(),
 		title: title.trim(),
 		status: 'todo',
 		dueDate: dueDate,
-		priority: params.priority || 'medium',
+		priority: isTaskPriority(params.priority) ? params.priority : 'medium',
 		tags: Array.isArray(params.tags) ? params.tags : [],
 		group: typeof params.group === 'string' ? params.group.trim() : '',
 		description: typeof params.description === 'string' ? params.description : '',
@@ -82,14 +143,14 @@ function createTaskHandler(dbStorage, params) {
 	if (task.dueDate === undefined) {
 		delete task.dueDate;
 	}
+	if (parentTaskId !== undefined) task.parentTaskId = parentTaskId;
 	if (reminderOffset !== undefined) task.reminderOffset = reminderOffset;
 	if (repeat !== undefined) task.repeat = repeat;
 
-	const tasks = readTasksFromDb(dbStorage);
 	tasks.push(task);
 	writeTasksToDb(dbStorage, tasks);
 
-	return { id: task.id, title: task.title, status: task.status };
+	return { id: task.id, title: task.title, status: task.status, parent_task_id: task.parentTaskId };
 }
 
 function listTasksHandler(dbStorage, params) {
@@ -117,16 +178,7 @@ function listTasksHandler(dbStorage, params) {
 	const limit = typeof p.limit === 'number' && p.limit > 0 ? p.limit : 20;
 	const sliced = tasks.slice(0, limit);
 
-	const result = sliced.map(function (t) {
-		return {
-			id: t.id,
-			title: t.title,
-			status: t.status,
-			priority: t.priority,
-			due_date: formatDate(t.dueDate),
-			tags: t.tags || [],
-		};
-	});
+	const result = sliced.map(toTaskListOutput);
 
 	return { tasks: result, total: tasks.length };
 }
@@ -172,10 +224,26 @@ function updateTaskHandler(dbStorage, params) {
 	}
 
 	if (params.title !== undefined) task.title = params.title;
-	if (params.status !== undefined) task.status = params.status;
-	if (params.priority !== undefined) task.priority = params.priority;
-	if (params.tags !== undefined) task.tags = params.tags;
+	if (params.status !== undefined) {
+		if (!isTaskStatus(params.status)) throw new Error('任务状态无效');
+		task.status = params.status;
+	}
+	if (params.priority !== undefined) {
+		if (!isTaskPriority(params.priority)) throw new Error('任务优先级无效');
+		task.priority = params.priority;
+	}
+	if (params.tags !== undefined) {
+		if (!Array.isArray(params.tags) || params.tags.some(function (tag) { return typeof tag !== 'string' })) {
+			throw new Error('tags 必须为字符串数组');
+		}
+		task.tags = params.tags.slice();
+	}
 	if (params.description !== undefined) task.description = params.description;
+	if (hasOwn(params, 'parent_task_id')) {
+		const parentTaskId = assertValidParentTask(tasks, params.parent_task_id, task.id);
+		if (parentTaskId === undefined) delete task.parentTaskId;
+		else task.parentTaskId = parentTaskId;
+	}
 	if (params.due_date !== undefined) {
 		const parsed = parseDate(params.due_date);
 		if (parsed !== undefined) {
@@ -209,7 +277,7 @@ function updateTaskHandler(dbStorage, params) {
 	task.updatedAt = Date.now();
 	writeTasksToDb(dbStorage, tasks);
 
-	return { id: task.id, title: task.title, status: task.status };
+	return { id: task.id, title: task.title, status: task.status, parent_task_id: task.parentTaskId };
 }
 
 function deleteTaskHandler(dbStorage, params) {
@@ -224,17 +292,13 @@ function deleteTaskHandler(dbStorage, params) {
 		throw new Error('未找到任务: ' + taskId);
 	}
 
-	tasks.splice(index, 1);
-	writeTasksToDb(dbStorage, tasks);
+	const next = tasks.filter(function (t) { return t.id !== taskId && t.parentTaskId !== taskId });
+	writeTasksToDb(dbStorage, next);
 
 	return { deleted: true };
 }
 
 // ── Subtask handlers ──────────────────────────────────────────────────
-
-function findSubtask(task, subtaskId) {
-	return (task.subtasks || []).find(function (s) { return s.id === subtaskId }) || null;
-}
 
 function addSubtaskHandler(dbStorage, params) {
 	const taskId = params && params.task_id;
@@ -250,16 +314,22 @@ function addSubtaskHandler(dbStorage, params) {
 	const subtask = {
 		id: generateId(),
 		title: title,
-		completed: false,
+		status: 'todo',
+		priority: task.priority || 'medium',
+		tags: Array.isArray(task.tags) ? task.tags.slice() : [],
+		group: typeof task.group === 'string' ? task.group : '',
+		description: '',
+		subtasks: [],
+		parentTaskId: task.id,
+		visible: true,
 		createdAt: now,
 		updatedAt: now,
 	};
-	if (!Array.isArray(task.subtasks)) task.subtasks = [];
-	task.subtasks.push(subtask);
+	tasks.push(subtask);
 	task.updatedAt = now;
 	writeTasksToDb(dbStorage, tasks);
 
-	return { task_id: task.id, subtask_id: subtask.id, title: subtask.title, completed: false };
+	return { task_id: task.id, subtask_id: subtask.id, title: subtask.title, completed: false, status: subtask.status, priority: subtask.priority, parent_task_id: task.id };
 }
 
 function updateSubtaskHandler(dbStorage, params) {
@@ -270,26 +340,44 @@ function updateSubtaskHandler(dbStorage, params) {
 
 	const hasCompleted = params && Object.prototype.hasOwnProperty.call(params, 'completed');
 	const hasTitle = params && Object.prototype.hasOwnProperty.call(params, 'title');
-	if (!hasCompleted && !hasTitle) {
-		throw new Error('至少需要提供 completed 或 title 之一');
+	const hasStatus = hasOwn(params, 'status');
+	const hasPriority = hasOwn(params, 'priority');
+	const hasDueDate = hasOwn(params, 'due_date');
+	const hasTags = hasOwn(params, 'tags');
+	const hasGroup = hasOwn(params, 'group');
+	const hasDescription = hasOwn(params, 'description');
+	if (!hasCompleted && !hasTitle && !hasStatus && !hasPriority && !hasDueDate && !hasTags && !hasGroup && !hasDescription) {
+		throw new Error('至少需要提供 completed、title、status、priority、due_date、tags、group 或 description 之一');
 	}
 	if (hasTitle && (typeof params.title !== 'string' || !params.title.trim())) {
 		throw new Error('子任务标题不能为空');
 	}
+	if (hasStatus && !isTaskStatus(params.status)) throw new Error('status 必须是 todo/doing/done 之一');
+	if (hasPriority && !isTaskPriority(params.priority)) throw new Error('priority 必须是 low/medium/high/urgent 之一');
 
 	const tasks = readTasksFromDb(dbStorage);
 	const task = findTaskById(tasks, taskId);
 	if (!task) throw new Error('未找到任务: ' + taskId);
-	const subtask = findSubtask(task, subtaskId);
+	const subtask = tasks.find(function (t) { return t.id === subtaskId && t.parentTaskId === taskId }) || null;
 	if (!subtask) throw new Error('未找到子任务: ' + subtaskId);
 
-	if (hasCompleted) subtask.completed = Boolean(params.completed);
+	if (hasCompleted) subtask.status = Boolean(params.completed) ? 'done' : 'todo';
+	if (hasStatus) subtask.status = params.status;
 	if (hasTitle) subtask.title = params.title.trim();
+	if (hasPriority) subtask.priority = params.priority;
+	if (hasDueDate) {
+		const parsed = parseDate(params.due_date);
+		if (parsed !== undefined) subtask.dueDate = parsed;
+		else delete subtask.dueDate;
+	}
+	if (hasTags) subtask.tags = Array.isArray(params.tags) ? params.tags : [];
+	if (hasGroup) subtask.group = typeof params.group === 'string' ? params.group.trim() : '';
+	if (hasDescription) subtask.description = typeof params.description === 'string' ? params.description : '';
 	subtask.updatedAt = Date.now();
 	task.updatedAt = subtask.updatedAt;
 	writeTasksToDb(dbStorage, tasks);
 
-	return { task_id: task.id, subtask_id: subtask.id, completed: subtask.completed, title: subtask.title };
+	return { task_id: task.id, subtask_id: subtask.id, completed: subtask.status === 'done', status: subtask.status, priority: subtask.priority, title: subtask.title, parent_task_id: task.id };
 }
 
 function deleteSubtaskHandler(dbStorage, params) {
@@ -301,11 +389,11 @@ function deleteSubtaskHandler(dbStorage, params) {
 	const tasks = readTasksFromDb(dbStorage);
 	const task = findTaskById(tasks, taskId);
 	if (!task) throw new Error('未找到任务: ' + taskId);
-	const before = (task.subtasks || []).length;
-	task.subtasks = (task.subtasks || []).filter(function (s) { return s.id !== subtaskId });
-	if (task.subtasks.length === before) throw new Error('未找到子任务: ' + subtaskId);
+	const before = tasks.length;
+	const next = tasks.filter(function (t) { return !(t.id === subtaskId && t.parentTaskId === taskId) });
+	if (next.length === before) throw new Error('未找到子任务: ' + subtaskId);
 	task.updatedAt = Date.now();
-	writeTasksToDb(dbStorage, tasks);
+	writeTasksToDb(dbStorage, next);
 
 	return { deleted: true };
 }
@@ -390,18 +478,7 @@ function searchTasksHandler(dbStorage, params) {
 	const offset = typeof p.offset === 'number' && p.offset >= 0 ? p.offset : 0;
 	const sliced = tasks.slice(offset, offset + limit);
 
-	const result = sliced.map(function (t) {
-		return {
-			id: t.id,
-			title: t.title,
-			status: t.status,
-			priority: t.priority,
-			due_date: formatDate(t.dueDate),
-			tags: t.tags || [],
-			group: t.group || '',
-			description: t.description || '',
-		};
-	});
+	const result = sliced.map(toTaskListOutput);
 
 	return { tasks: result, total: total, limit: limit, offset: offset };
 }
@@ -547,6 +624,7 @@ function getTaskHandler(dbStorage, params) {
 	if (!task) throw new Error('未找到任务: ' + taskId);
 	return {
 		id: task.id,
+		parent_task_id: task.parentTaskId,
 		title: task.title,
 		status: task.status,
 		priority: task.priority,
@@ -563,6 +641,7 @@ function getTaskHandler(dbStorage, params) {
 				updated_at: formatDate(s.updatedAt),
 			};
 		}),
+		children: getDirectChildren(tasks, task.id).map(toChildOutput),
 		created_at: formatDate(task.createdAt),
 		updated_at: formatDate(task.updatedAt),
 	};
@@ -577,7 +656,14 @@ const SETTINGS_DEFAULTS = {
 	showCompleted: false,
 	defaultView: 'list',
 	notifyEnabled: true,
+	pomodoroMinutes: 40,
 };
+
+function normalizePomodoroMinutesSetting(value) {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return SETTINGS_DEFAULTS.pomodoroMinutes;
+	const minutes = Math.trunc(value);
+	return minutes >= 1 && minutes <= 240 ? minutes : SETTINGS_DEFAULTS.pomodoroMinutes;
+}
 
 function getSettingsHandler(settingsDb) {
 	let parsed;
@@ -598,6 +684,7 @@ function getSettingsHandler(settingsDb) {
 		defaultView: parsed.defaultView === 'list' || parsed.defaultView === 'kanban' || parsed.defaultView === 'eisenhower' || parsed.defaultView === 'calendar'
 			? parsed.defaultView : SETTINGS_DEFAULTS.defaultView,
 		notifyEnabled: typeof parsed.notifyEnabled === 'boolean' ? parsed.notifyEnabled : SETTINGS_DEFAULTS.notifyEnabled,
+		pomodoroMinutes: normalizePomodoroMinutesSetting(parsed.pomodoroMinutes),
 	};
 }
 
@@ -660,7 +747,7 @@ function notifyHandler(params, deps) {
 		return { notified: false, reason: '通知已关闭' };
 	}
 	const body = params && typeof params.body === 'string' ? params.body : '';
-	deps.showNotification({ title: title.trim(), body: body });
+	deps.showNotification(body ? title.trim() + '：' + body : title.trim(), 'todo');
 	return { notified: true };
 }
 
@@ -824,8 +911,7 @@ function createTemplateHandler(dbStorage, params) {
 	if (!name) throw new Error('模板名称不能为空');
 	const title = params && typeof params.title === 'string' ? params.title.trim() : '';
 	if (!title) throw new Error('模板标题不能为空');
-	const priority = params && (params.priority === 'low' || params.priority === 'medium' || params.priority === 'high')
-		? params.priority : 'medium';
+	const priority = params && isTaskPriority(params.priority) ? params.priority : 'medium';
 	const reminderOffset = normalizeReminderOffset(params.reminder_offset);
 	const repeat = normalizeRepeatRule(params.repeat);
 	const now = Date.now();

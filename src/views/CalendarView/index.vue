@@ -1,12 +1,15 @@
 <script setup lang="ts">
   import { computed, onMounted, ref } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
+  import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
 import SmartTaskInput from '../../components/SmartTaskInput.vue';
 import TaskCard from '../../components/TaskCard.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
 import ViewToolbar from '../../components/ViewToolbar.vue';
+  import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
+  import { taskWorkflowService } from '../../services/taskWorkflowService';
 import type { CreateTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../types/task';
 import { getTaskStart } from '../../types/task';
 
@@ -36,8 +39,12 @@ import { getTaskStart } from '../../types/task';
   };
 
   const filteredTasks = computed(() =>
-    searchAndSortTasks(props.tasks, { ...props.filter }, { field: 'dueDate', order: 'asc' }),
+    taskService.getTasksInParentOrder(
+      searchAndSortTasks(props.tasks, { ...props.filter }, { field: 'dueDate', order: 'asc' }),
+    ),
   );
+
+  const { getTaskDepth, getParentTitle } = useTaskHierarchy(() => props.tasks);
 
   const tasksByDate = computed(() => {
     const map = new Map<string, Task[]>();
@@ -88,7 +95,7 @@ import { getTaskStart } from '../../types/task';
   };
 
   const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    taskService.changeStatus(taskId, status);
+    taskWorkflowService.changeStatus(taskId, status);
     emit('refresh');
   };
 
@@ -99,6 +106,11 @@ import { getTaskStart } from '../../types/task';
   const handleQuickCreate = (payload: CreateTaskInput): void => {
     taskService.create(payload);
     emit('refresh');
+  };
+  const handleCreateOnSelectedDate = (): void => {
+    if (!selectedDateKey.value) return;
+    editingTask.value = null;
+    editorVisible.value = true;
   };
   const handleOpenEdit = (task: Task): void => { editingTask.value = task; editorVisible.value = true; };
   const handleSaved = (): void => { emit('refresh'); };
@@ -155,11 +167,17 @@ import { getTaskStart } from '../../types/task';
         <div class="day-panel-header">
           <span class="day-panel-title">{{ formatLabel(selectedDateKey) }}</span>
           <span class="count-badge">{{ selectedTasks.length }} 项</span>
+          <button type="button" class="btn btn-ghost day-panel-create" @click="handleCreateOnSelectedDate">
+            <AppIcon name="plus" :size="14" />
+            <span>新建</span>
+          </button>
         </div>
         <div v-if="selectedTasks.length > 0" class="day-task-list">
           <TaskCard v-for="task in selectedTasks" :key="task.id" :task="task" variant="day" priority-display="dot"
-            :show-status-toggle="false" @click="handleOpenEdit">
+            :show-status-toggle="false" :depth="getTaskDepth(task)" :parent-title="getParentTitle(task)"
+            @click="handleOpenEdit">
             <template #actions="{ task: t }">
+              <PomodoroStartButton :task="t" />
               <button type="button" class="btn-icon day-task__toggle" :class="{ active: t.status === 'done' }"
                 :title="t.status === 'done' ? '恢复待办' : '标记完成'" @click.stop="handleToggleDone(t)">
                 <AppIcon :name="t.status === 'done' ? 'circle' : 'check'" :size="14" />
@@ -171,7 +189,7 @@ import { getTaskStart } from '../../types/task';
       </aside>
     </div>
 
-    <TaskEditor v-model="editorVisible" :task="editingTask" @saved="handleSaved" />
+    <TaskEditor v-model="editorVisible" :task="editingTask" :initial-due-date="selectedDateKey" @saved="handleSaved" />
   </section>
 </template>
 
@@ -397,6 +415,14 @@ import { getTaskStart } from '../../types/task';
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .day-panel-create {
+    height: 28px;
+    padding: 0 var(--space-2);
+    gap: 4px;
+    font-size: var(--text-xs);
+    flex-shrink: 0;
   }
 
   .day-task-list {

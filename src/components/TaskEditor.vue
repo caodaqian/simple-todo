@@ -3,9 +3,12 @@
 import { renderMarkdown } from '../services/markdownService';
 import { notify } from '../services/notifyService';
 import { taskService } from '../services/taskService';
-import type { RepeatRule, SaveTaskInput, Subtask, Task, TaskPriority, TaskStatus } from '../types/task';
+  import { taskWorkflowService } from '../services/taskWorkflowService';
+  import { templateService, type CreateTemplateInput } from '../services/templateService';
+  import type { RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
 import { getTaskEnd, getTaskStart } from '../types/task';
 import AppIcon from './AppIcon.vue';
+  import PomodoroStartButton from './PomodoroStartButton.vue';
 
   type RepeatFormType = '' | RepeatRule['type'];
 
@@ -33,11 +36,13 @@ import AppIcon from './AppIcon.vue';
   const props = defineProps<{
     modelValue: boolean;
     task?: Task | null;
+    initialDueDate?: string;
   }>();
 
   const emit = defineEmits<{
     (event: 'update:modelValue', value: boolean): void;
     (event: 'saved', task: Task): void;
+    (event: 'open-task', task: Task): void;
   }>();
 
   const statusOptions: Array<{ label: string; value: TaskStatus }> = [
@@ -54,9 +59,13 @@ import AppIcon from './AppIcon.vue';
   ];
 
   const form = ref<TaskEditorForm>(makeEmptyForm());
-  const subtasks = ref<Subtask[]>([]);
+  const currentTask = ref<Task | null>(null);
+  const parentTask = ref<Task | null>(null);
+  const subtasks = ref<Task[]>([]);
   const newSubtaskTitle = ref('');
   const errorMessage = ref('');
+  const templates = ref<TaskTemplate[]>([]);
+  const selectedTemplateId = ref('');
 
   // chip 输入相关
   const tagDraft = ref('');
@@ -94,7 +103,8 @@ import AppIcon from './AppIcon.vue';
     };
   }
 
-  const isEditMode = computed(() => !!props.task);
+  const isEditMode = computed(() => !!currentTask.value);
+  const isChildTask = computed(() => !!currentTask.value?.parentTaskId);
 
   // ─── Markdown 实时预览（单区域切换 + 防抖） ────────────────
   // 编辑模式与预览模式共用同一区域：聚焦编辑、失焦后自动渲染预览。
@@ -186,6 +196,65 @@ import AppIcon from './AppIcon.vue';
     form.value.reminderOffset = value === '' ? null : Number(value);
   };
 
+  const refreshTemplates = (): void => {
+    templates.value = templateService.list();
+  };
+
+  const applySelectedTemplate = (): void => {
+    const tpl = templates.value.find((item) => item.id === selectedTemplateId.value);
+    if (!tpl) {
+      errorMessage.value = '请选择要套用的模板';
+      return;
+    }
+
+    form.value.title = tpl.title;
+    form.value.priority = tpl.priority;
+    form.value.group = tpl.group;
+    form.value.tags = [...tpl.tags];
+    form.value.description = tpl.description;
+    form.value.reminderOffset = tpl.reminderOffset !== undefined ? tpl.reminderOffset : null;
+    form.value.repeatType = tpl.repeat?.type ?? '';
+    form.value.repeatInterval = tpl.repeat?.interval ?? 1;
+    form.value.repeatUntilDate = tpl.repeat?.repeatUntil !== undefined ? formatDateInput(tpl.repeat.repeatUntil) : '';
+    errorMessage.value = '';
+    flushDescRender();
+  };
+
+  const saveCurrentAsTemplate = (): void => {
+    const name = window.prompt('请输入模板名称')?.trim();
+    if (!name) return;
+
+    const f = form.value;
+    const input: CreateTemplateInput = {
+      name,
+      title: f.title.trim() || name,
+      priority: f.priority,
+      tags: [...f.tags],
+      group: f.group.trim(),
+      description: f.description,
+    };
+    if (f.reminderOffset !== null && f.reminderOffset >= 0) {
+      input.reminderOffset = f.reminderOffset;
+    }
+    if (f.repeatType) {
+      const repeat: RepeatRule = {
+        type: f.repeatType,
+        interval: f.repeatInterval > 0 ? f.repeatInterval : 1,
+      };
+      if (f.repeatUntilDate) {
+        const repeatUntil = dateInputToTimestamp(f.repeatUntilDate);
+        if (!Number.isNaN(repeatUntil)) repeat.repeatUntil = repeatUntil;
+      }
+      input.repeat = repeat;
+    }
+
+    const tpl = templateService.create(input);
+    refreshTemplates();
+    selectedTemplateId.value = tpl.id;
+    errorMessage.value = '';
+    notify('模板保存成功', `“${tpl.name}”已保存`);
+  };
+
   // 截止时间摘要展示在 hero
   const dueSummary = computed<string>(() => {
     if (!form.value.hasDue || !form.value.startDate) return '';
@@ -212,6 +281,43 @@ import AppIcon from './AppIcon.vue';
     }
     return `${dateStr} ${timeStr}`;
   });
+
+  const statusLabel = (status: TaskStatus): string =>
+    statusOptions.find((item) => item.value === status)?.label ?? status;
+
+  const priorityLabel = (priority: TaskPriority): string =>
+    priorityOptions.find((item) => item.value === priority)?.label ?? priority;
+
+  const formatTaskDue = (task: Task): string => {
+    const start = getTaskStart(task);
+    if (start === undefined) return '无截止时间';
+    const dateText = new Date(start).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+    if (task.allDay) return `${dateText} 全天`;
+    return `${dateText} ${formatTimeInput(start)}`;
+  };
+
+  const nextStatus = (status: TaskStatus): TaskStatus => {
+    if (status === 'todo') return 'doing';
+    if (status === 'doing') return 'done';
+    return 'todo';
+  };
+
+  const makeLocalSubtask = (title: string): Task => {
+    const now = Date.now();
+    const draft: Task = {
+      id: `draft-${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      title,
+      status: 'todo',
+      priority: form.value.priority,
+      tags: [...form.value.tags],
+      group: form.value.group.trim(),
+      description: '',
+      subtasks: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    return draft;
+  };
 
   // ─── 自动补全候选 ──────────────────────────────────────
   // ─── 合并的日期+时间输入值（单一 input） ──────────────────
@@ -403,10 +509,14 @@ import AppIcon from './AppIcon.vue';
   };
 
   // ─── 表单初始化 ──────────────────────────────────────
-  const resetForm = (): void => {
-    const task = props.task;
+  const resetForm = (nextTask: Task | null | undefined = props.task): void => {
+    const task = nextTask ?? null;
+    currentTask.value = task;
+    refreshTemplates();
+    selectedTemplateId.value = '';
 
     if (task) {
+      parentTask.value = taskService.getParentTask(task);
       const start = getTaskStart(task);
       const end = getTaskEnd(task);
       const hasDue = start !== undefined;
@@ -432,9 +542,15 @@ import AppIcon from './AppIcon.vue';
         repeatInterval: repeat ? repeat.interval : 1,
         repeatUntilDate: repeat?.repeatUntil ? formatDateInput(repeat.repeatUntil) : '',
       };
-      subtasks.value = task.subtasks.map((item) => ({ ...item }));
+      subtasks.value = task.parentTaskId ? [] : taskService.getChildTasks(task.id);
     } else {
+      parentTask.value = null;
       form.value = makeEmptyForm();
+      if (props.initialDueDate) {
+        form.value.hasDue = true;
+        form.value.allDay = true;
+        form.value.startDate = props.initialDueDate;
+      }
       subtasks.value = [];
     }
 
@@ -451,7 +567,7 @@ import AppIcon from './AppIcon.vue';
   };
 
   watch(
-    () => [props.modelValue, props.task] as const,
+    () => [props.modelValue, props.task, props.initialDueDate] as const,
     ([visible]) => {
       if (visible) {
         resetForm();
@@ -481,7 +597,6 @@ import AppIcon from './AppIcon.vue';
       repeatType: f.repeatType,
       repeatInterval: f.repeatInterval,
       repeatUntilDate: f.repeatUntilDate,
-      subtasks: subtasks.value.map((s) => ({ c: s.completed, t: s.title })),
     });
   }
 
@@ -489,100 +604,82 @@ import AppIcon from './AppIcon.vue';
     emit('update:modelValue', false);
   };
 
-  // ─── 子任务持久化（编辑模式直接写库） ────────────────────
-  const persistEditedSubtasks = (nextSubtasks: Subtask[]): boolean => {
-    if (!props.task) {
-      subtasks.value = nextSubtasks;
-      return true;
-    }
-    const updated = taskService.update(props.task.id, { subtasks: nextSubtasks });
-    if (!updated) {
-      errorMessage.value = '子任务更新失败，请重试';
-      return false;
-    }
-    subtasks.value = updated.subtasks.map((item) => ({ ...item }));
-    return true;
-  };
-
   const handleAddSubtask = (): void => {
     const title = newSubtaskTitle.value.trim();
     if (!title) return;
     errorMessage.value = '';
-    if (!props.task) {
-      const now = Date.now();
-      subtasks.value.push({
-        id: `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
-        title,
-        completed: false,
-        createdAt: now,
-        updatedAt: now,
-      });
+    if (isChildTask.value) return;
+    const task = currentTask.value;
+    if (!task) {
+      subtasks.value = [...subtasks.value, makeLocalSubtask(title)];
       newSubtaskTitle.value = '';
       return;
     }
-    const created = taskService.addSubtask(props.task.id, title);
+    const created = taskService.addSubtask(task.id, title);
     if (!created) {
       errorMessage.value = '新增子任务失败，请重试';
       return;
     }
-    subtasks.value = [...subtasks.value, created];
+    subtasks.value = taskService.getChildTasks(task.id);
     newSubtaskTitle.value = '';
     lastFlushedSnapshot = formSnapshot(); // 子任务已落库，避免误触发
+    emit('saved', task);
   };
 
-  const handleToggleSubtask = (subtask: Subtask): void => {
+  const handleSubtaskStatusChange = (subtask: Task, status: TaskStatus): void => {
     errorMessage.value = '';
-    if (!props.task) {
+    const task = currentTask.value;
+    if (!task) {
       subtasks.value = subtasks.value.map((item) =>
-        item.id === subtask.id ? { ...item, completed: !item.completed, updatedAt: Date.now() } : item,
+        item.id === subtask.id ? { ...item, status, updatedAt: Date.now() } : item,
       );
       return;
     }
-    const ok = taskService.updateSubtask(props.task.id, subtask.id, !subtask.completed);
-    if (!ok) {
+    const updated = taskWorkflowService.changeStatus(subtask.id, status);
+    if (!updated) {
       errorMessage.value = '更新子任务状态失败，请重试';
       return;
     }
     subtasks.value = subtasks.value.map((item) =>
-      item.id === subtask.id ? { ...item, completed: !item.completed, updatedAt: Date.now() } : item,
+      item.id === subtask.id ? updated : item,
     );
     lastFlushedSnapshot = formSnapshot();
+    emit('saved', task);
   };
 
   const handleDeleteSubtask = (subtaskId: string): void => {
     errorMessage.value = '';
-    if (!props.task) {
+    const task = currentTask.value;
+    if (!task) {
       subtasks.value = subtasks.value.filter((item) => item.id !== subtaskId);
       return;
     }
-    const ok = taskService.deleteSubtask(props.task.id, subtaskId);
+    const ok = taskService.deleteSubtask(task.id, subtaskId);
     if (!ok) {
       errorMessage.value = '删除子任务失败，请重试';
       return;
     }
     subtasks.value = subtasks.value.filter((item) => item.id !== subtaskId);
     lastFlushedSnapshot = formSnapshot();
+    emit('saved', task);
   };
 
-  const handleSubtaskTitleChange = (subtaskId: string, title: string): void => {
-    const nextTitle = title.trim();
-    if (!nextTitle) {
-      errorMessage.value = '子任务标题不能为空';
-      return;
-    }
-    errorMessage.value = '';
-    const nextSubtasks = subtasks.value.map((item) =>
-      item.id === subtaskId ? { ...item, title: nextTitle, updatedAt: Date.now() } : item,
-    );
-    persistEditedSubtasks(nextSubtasks);
-    lastFlushedSnapshot = formSnapshot();
+  const openTaskInEditor = (task: Task): void => {
+    const latest = taskService.getById(task.id) ?? task;
+    resetForm(latest);
+    emit('open-task', latest);
+  };
+
+  const openParentTask = (): void => {
+    if (!parentTask.value) return;
+    openTaskInEditor(parentTask.value);
   };
 
   // ─── 构建保存 payload ──────────────────────────────
   function buildSavePayload(): SaveTaskInput {
     const f = form.value;
     const title = f.title.trim();
-    const task = props.task;
+    const task = currentTask.value;
 
     // 仅当 hasDue 设为 true 才写入截止时间；false 时显式置空
     let dueStart: number | undefined;
@@ -619,7 +716,6 @@ import AppIcon from './AppIcon.vue';
       group: f.group.trim(),
       tags: [...f.tags],
       description: f.description,
-      subtasks: subtasks.value.map((item) => ({ ...item })),
       dueStart,
       dueEnd,
       allDay: allDayFlag,
@@ -645,13 +741,14 @@ import AppIcon from './AppIcon.vue';
   // ─── 自动保存：编辑模式 800ms 防抖 ────────────────────
   const flushSave = (): void => {
     if (isFlushing) return;
-    if (!props.task) return; // 新建模式不自动保存
+    if (!currentTask.value) return; // 新建模式不自动保存
     const title = form.value.title.trim();
     if (!title) return; // 空标题跳过，不创建
     isFlushing = true;
     try {
       const payload = buildSavePayload();
       const saved = taskService.saveTask(payload);
+      currentTask.value = saved;
       lastFlushedSnapshot = formSnapshot();
       emit('saved', saved);
     } catch (err) {
@@ -708,6 +805,21 @@ import AppIcon from './AppIcon.vue';
       const { id: _omit, ...rest } = payload;
       void _omit;
       const saved = taskService.saveTask(rest);
+      for (const child of subtasks.value) {
+        taskService.saveTask({
+          title: child.title,
+          status: child.status,
+          priority: child.priority,
+          tags: [...child.tags],
+          group: child.group,
+          description: child.description,
+          parentTaskId: saved.id,
+          ...(child.dueDate === undefined ? {} : { dueDate: child.dueDate }),
+          ...(child.dueStart === undefined ? {} : { dueStart: child.dueStart }),
+          ...(child.dueEnd === undefined ? {} : { dueEnd: child.dueEnd }),
+          ...(child.allDay === undefined ? {} : { allDay: child.allDay }),
+        });
+      }
       notify('任务创建成功', `"${title}" 已创建`);
       emit('saved', saved);
       closeEditor();
@@ -747,7 +859,7 @@ import AppIcon from './AppIcon.vue';
         </header>
 
         <div class="task-editor-body">
-          <section class="editor-main-column">
+          <section class="editor-hero-column">
             <div class="hero-panel">
               <div class="hero-meta-row">
                 <span class="meta-pill" :class="`status-${form.status}`">
@@ -761,6 +873,12 @@ import AppIcon from './AppIcon.vue';
                   <span class="meta-separator"></span>
                   <span class="meta-text meta-due">{{ dueSummary }}</span>
                 </template>
+                <template v-if="parentTask">
+                  <span class="meta-separator"></span>
+                  <button type="button" class="parent-task-link" @click="openParentTask">
+                    属于：{{ parentTask.title }}
+                  </button>
+                </template>
               </div>
 
               <label class="title-field">
@@ -768,67 +886,33 @@ import AppIcon from './AppIcon.vue';
                 <input v-model.trim="form.title" type="text" placeholder="请输入任务标题" class="title-input" />
               </label>
             </div>
-
-            <section class="content-card desc-card">
-              <div class="section-heading tight">
-                <div>
-                  <p class="section-kicker">内容</p>
-                  <h3>描述</h3>
-                </div>
-                <span class="section-hint">支持 Markdown · 点击预览可编辑</span>
-              </div>
-              <div class="desc-shell">
-                <textarea
-                  v-if="descEditing"
-                  ref="descTextareaRef"
-                  v-model="form.description"
-                  rows="10"
-                  placeholder="支持 Markdown 文本输入，停止输入或失焦后自动预览"
-                  class="desc-textarea"
-                  @focus="enterDescEditing"
-                  @blur="scheduleLeaveDescEditing"
-                />
-                <div
-                  v-else
-                  class="desc-preview"
-                  :class="{ 'is-empty': !descPreviewHtml }"
-                  @click="enterDescEditing"
-                >
-                  <div v-if="descPreviewHtml" v-html="descPreviewHtml"></div>
-                  <p v-else class="desc-empty">点击此处添加描述（支持 Markdown）</p>
-                </div>
-              </div>
-            </section>
-
-            <section class="content-card subtask-card">
-              <div class="section-heading tight">
-                <div>
-                  <p class="section-kicker">执行项</p>
-                  <h3>子任务</h3>
-                </div>
-                <span class="section-count">{{ subtasks.length }} 项</span>
-              </div>
-
-              <div class="subtask-create-panel">
-                <input v-model.trim="newSubtaskTitle" type="text" placeholder="输入子任务标题"
-                  @keydown.enter.prevent="handleAddSubtask" />
-                <button type="button" class="btn btn-primary" @click="handleAddSubtask">新增</button>
-              </div>
-
-              <ul v-if="subtasks.length > 0" class="subtask-list">
-                <li v-for="subtask in subtasks" :key="subtask.id" class="subtask-item">
-                  <input :checked="subtask.completed" type="checkbox" @change="handleToggleSubtask(subtask)" />
-                  <input :value="subtask.title" type="text" :class="{ done: subtask.completed }"
-                    @blur="handleSubtaskTitleChange(subtask.id, ($event.target as HTMLInputElement).value)" />
-                  <button type="button" class="btn btn-danger subtask-delete"
-                    @click="handleDeleteSubtask(subtask.id)">删除</button>
-                </li>
-              </ul>
-              <p v-else class="subtask-empty">暂无子任务，先拆出一个最小行动项。</p>
-            </section>
           </section>
 
-          <aside class="editor-side-column">
+          <aside class="editor-side-column" aria-label="任务属性">
+            <section class="side-card template-card">
+              <div class="section-heading compact">
+                <div>
+                  <p class="section-kicker">模板</p>
+                  <h3>任务模板</h3>
+                </div>
+              </div>
+
+              <label class="field-block">
+                <span class="field-label">选择模板</span>
+                <select v-model="selectedTemplateId" class="template-select" :disabled="templates.length === 0">
+                  <option value="">{{ templates.length > 0 ? '请选择模板' : '暂无模板' }}</option>
+                  <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">{{ tpl.name }}</option>
+                </select>
+              </label>
+
+              <div class="template-action-row">
+                <button type="button" class="btn btn-primary" :disabled="!selectedTemplateId"
+                  @click="applySelectedTemplate">一键套用</button>
+                <button type="button" class="btn btn-ghost" @click="saveCurrentAsTemplate">保存当前为模板</button>
+              </div>
+              <p class="field-hint">套用模板不会覆盖当前截止时间。</p>
+            </section>
+
             <section class="side-card">
               <div class="section-heading compact">
                 <div>
@@ -863,6 +947,7 @@ import AppIcon from './AppIcon.vue';
 
               <div class="field-block">
                 <span class="field-label">分组</span>
+                <label class="sr-only" for="task-group-input">任务分组</label>
                 <div class="chip-input-group">
                   <span v-if="form.group" class="preview-chip group-chip">
                     {{ form.group }}
@@ -870,6 +955,7 @@ import AppIcon from './AppIcon.vue';
                   </span>
                   <input
                     v-else
+id="task-group-input"
                     v-model="groupDraft"
                     type="text"
                     class="chip-input"
@@ -891,12 +977,14 @@ import AppIcon from './AppIcon.vue';
 
               <div class="field-block">
                 <span class="field-label">标签</span>
+                <label class="sr-only" for="task-tag-input">任务标签</label>
                 <div class="chip-input-group">
                   <span v-for="tag in form.tags" :key="tag" class="preview-chip tag-chip">
                     #{{ tag }}
                     <button type="button" class="chip-remove" aria-label="移除标签" @click="removeTag(tag)">×</button>
                   </span>
                   <input
+id="task-tag-input"
                     ref="tagInputRef"
                     v-model="tagDraft"
                     type="text"
@@ -1010,6 +1098,7 @@ import AppIcon from './AppIcon.vue';
                   </select>
                 </div>
                 <p v-if="!form.hasDue" class="field-hint">需先设置截止时间</p>
+                <p class="field-hint">插件窗口打开时实时提醒；关闭后会在下次进入时补报。</p>
               </label>
             </section>
 
@@ -1058,6 +1147,83 @@ import AppIcon from './AppIcon.vue';
               </template>
             </section>
           </aside>
+
+          <section class="editor-main-column">
+
+            <section class="content-card desc-card">
+              <div class="section-heading tight">
+                <div>
+                  <p class="section-kicker">内容</p>
+                  <h3>描述</h3>
+                </div>
+                <span class="section-hint">支持 Markdown · 点击预览可编辑</span>
+              </div>
+              <div class="desc-shell">
+                <label class="sr-only" for="task-description-input">任务描述</label>
+                <textarea v-if="descEditing" id="task-description-input" ref="descTextareaRef"
+                  v-model="form.description" rows="10" placeholder="支持 Markdown 文本输入，停止输入或失焦后自动预览" class="desc-textarea"
+                  @focus="enterDescEditing" @blur="scheduleLeaveDescEditing" />
+                <div v-else class="desc-preview" :class="{ 'is-empty': !descPreviewHtml }" @click="enterDescEditing">
+                  <div v-if="descPreviewHtml" v-html="descPreviewHtml"></div>
+                  <p v-else class="desc-empty">点击此处添加描述（支持 Markdown）</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="content-card subtask-card">
+              <div class="section-heading tight">
+                <div>
+                  <p class="section-kicker">执行项</p>
+                  <h3>子任务</h3>
+                </div>
+                <span class="section-count">{{ subtasks.length }} 项</span>
+              </div>
+
+              <div v-if="!isChildTask" class="subtask-create-panel">
+                <label class="sr-only" for="new-subtask-title-input">输入子任务标题</label>
+                <input id="new-subtask-title-input" v-model.trim="newSubtaskTitle" type="text" placeholder="输入子任务标题"
+                  @keydown.enter.prevent="handleAddSubtask" />
+                <button type="button" class="btn btn-primary" @click="handleAddSubtask">新增</button>
+              </div>
+              <p v-else class="subtask-context-hint">当前任务是子任务，可从父任务中管理同级执行项。</p>
+
+              <ul v-if="subtasks.length > 0" class="subtask-list">
+                <li v-for="subtask in subtasks" :key="subtask.id" class="subtask-item">
+                  <fieldset class="subtask-status-group">
+                    <legend class="sr-only">设置子任务状态：{{ subtask.title }}</legend>
+                    <button v-for="item in statusOptions" :key="item.value" type="button" class="subtask-status-btn"
+                      :class="[`status-${item.value}`, { active: subtask.status === item.value }]" :title="item.label"
+                      @click="handleSubtaskStatusChange(subtask, item.value)">{{ item.label }}</button>
+                  </fieldset>
+
+                  <button type="button" class="subtask-main" :disabled="!currentTask"
+                    @click="openTaskInEditor(subtask)">
+                    <span class="subtask-title" :class="{ done: subtask.status === 'done' }">{{ subtask.title }}</span>
+                    <span class="subtask-meta-row">
+                      <span class="subtask-chip"
+                        :class="`priority-${subtask.priority}`">{{ priorityLabel(subtask.priority) }}优先级</span>
+                      <span class="subtask-chip muted">{{ formatTaskDue(subtask) }}</span>
+                      <span v-if="parentTask" class="subtask-chip muted">属于：{{ parentTask.title }}</span>
+                    </span>
+                  </button>
+
+                  <div class="subtask-actions">
+                    <button type="button" class="subtask-cycle-btn" :class="`status-${subtask.status}`"
+                      @click="handleSubtaskStatusChange(subtask, nextStatus(subtask.status))">
+                      {{ statusLabel(subtask.status) }}
+                    </button>
+                    <PomodoroStartButton v-if="currentTask" :task="subtask" />
+                    <button v-if="currentTask" type="button" class="btn btn-ghost subtask-open"
+                      @click="openTaskInEditor(subtask)">打开</button>
+                    <button type="button" class="btn btn-danger subtask-delete"
+                      @click="handleDeleteSubtask(subtask.id)">删除</button>
+                  </div>
+                </li>
+              </ul>
+              <p v-else class="subtask-empty">{{ isChildTask ? '当前子任务没有下级执行项。' : '暂无子任务，先拆出一个最小行动项。' }}</p>
+            </section>
+          </section>
+
         </div>
 
         <footer class="task-editor-footer">
@@ -1145,10 +1311,18 @@ import AppIcon from './AppIcon.vue';
     overflow: auto;
     padding: var(--space-3);
     display: grid;
-    grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.9fr);
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-areas:
+      "hero side"
+      "main side";
     gap: var(--space-3);
     align-items: start;
     background: linear-gradient(180deg, color-mix(in srgb, var(--color-bg-base) 18%, transparent), transparent 220px);
+  }
+
+  .editor-hero-column {
+    grid-area: hero;
+    min-width: 0;
   }
 
   .editor-main-column,
@@ -1157,7 +1331,17 @@ import AppIcon from './AppIcon.vue';
     flex-direction: column;
     gap: var(--space-3);
     min-width: 0;
-    min-height: 0;
+    /* 不能用 0：在矮窗口下会让 grid 行的自动最小尺寸塌陷为 0，
+       导致内容溢出并与相邻区域重叠（元素堆叠）。 */
+    min-height: auto;
+  }
+
+  .editor-main-column {
+    grid-area: main;
+  }
+
+  .editor-side-column {
+    grid-area: side;
   }
 
   .hero-panel,
@@ -1234,6 +1418,29 @@ import AppIcon from './AppIcon.vue';
     background: color-mix(in srgb, var(--color-priority-high) 18%, transparent);
     color: var(--color-priority-high);
     border-color: color-mix(in srgb, var(--color-priority-high) 30%, transparent);
+  }
+
+  .meta-pill.priority-urgent {
+    background: color-mix(in srgb, var(--color-priority-urgent) 18%, transparent);
+    color: var(--color-priority-urgent);
+    border-color: color-mix(in srgb, var(--color-priority-urgent) 30%, transparent);
+  }
+
+  .parent-task-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-full);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-size: var(--text-sm);
+    cursor: pointer;
+  }
+
+  .parent-task-link:hover {
+    border-color: var(--color-accent);
   }
 
   .meta-separator {
@@ -1314,6 +1521,18 @@ import AppIcon from './AppIcon.vue';
   textarea {
     font: inherit;
     color: inherit;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   input,
@@ -1421,7 +1640,7 @@ import AppIcon from './AppIcon.vue';
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--space-2);
-    padding: 10px var(--space-3);
+    padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
     border: 1px solid var(--color-border-subtle);
     background: color-mix(in srgb, var(--color-bg-input) 78%, transparent);
@@ -1433,33 +1652,133 @@ import AppIcon from './AppIcon.vue';
     background: color-mix(in srgb, var(--color-bg-hover) 55%, var(--color-bg-input));
   }
 
-  .subtask-list input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
+  .subtask-status-group,
+  .subtask-actions,
+  .subtask-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .subtask-status-group {
+    flex-wrap: nowrap;
     margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .subtask-status-btn,
+  .subtask-cycle-btn {
+    min-height: 24px;
+    padding: 0 7px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--color-border-subtle);
+    background: color-mix(in srgb, var(--color-bg-elevated) 90%, transparent);
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
     cursor: pointer;
-    accent-color: var(--color-accent);
-    flex-shrink: 0;
   }
 
-  .subtask-list input[type="text"] {
-    border-color: transparent;
+  .subtask-status-btn.active.status-todo,
+  .subtask-cycle-btn.status-todo {
+    color: var(--color-status-todo);
+    border-color: color-mix(in srgb, var(--color-status-todo) 34%, transparent);
+    background: color-mix(in srgb, var(--color-status-todo) 14%, transparent);
+  }
+
+  .subtask-status-btn.active.status-doing,
+  .subtask-cycle-btn.status-doing {
+    color: var(--color-status-doing);
+    border-color: color-mix(in srgb, var(--color-status-doing) 34%, transparent);
+    background: color-mix(in srgb, var(--color-status-doing) 14%, transparent);
+  }
+
+  .subtask-status-btn.active.status-done,
+  .subtask-cycle-btn.status-done {
+    color: var(--color-status-done);
+    border-color: color-mix(in srgb, var(--color-status-done) 34%, transparent);
+    background: color-mix(in srgb, var(--color-status-done) 14%, transparent);
+  }
+
+  .subtask-main {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    min-width: 0;
+    border: none;
     background: transparent;
-    padding-left: 0;
-    padding-right: 0;
-    min-height: 34px;
+    color: inherit;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
   }
 
-  .subtask-list input[type="text"]:hover,
-  .subtask-list input[type="text"]:focus {
-    border-color: transparent;
-    background: transparent;
-    box-shadow: none;
+  .subtask-main:disabled {
+    cursor: default;
   }
 
-  .subtask-list .done {
+  .subtask-title {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-primary);
+    font-weight: 600;
+  }
+
+  .subtask-title.done {
     text-decoration: line-through;
     color: var(--color-text-muted);
+  }
+
+  .subtask-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    padding: 0 6px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--color-bg-elevated) 74%, transparent);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+  }
+
+  .subtask-chip.priority-low {
+    color: var(--color-priority-low);
+  }
+
+  .subtask-chip.priority-medium {
+    color: var(--color-priority-medium);
+  }
+
+  .subtask-chip.priority-high {
+    color: var(--color-priority-high);
+  }
+
+  .subtask-chip.priority-urgent {
+    color: var(--color-priority-urgent);
+  }
+
+  .subtask-chip.muted {
+    color: var(--color-text-muted);
+  }
+
+  .subtask-context-hint {
+    margin: 0 0 var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-size: var(--text-sm);
+  }
+
+  .subtask-open,
+  .subtask-delete {
+    min-height: 26px;
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
   }
 
   .subtask-empty {
@@ -1773,12 +2092,24 @@ import AppIcon from './AppIcon.vue';
   }
 
   /* ── 提醒 & 重复 cards ─────────────────────────────── */
+  .template-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .template-action-row .btn {
+    flex: 1 1 120px;
+  }
+
   .reminder-select-row {
     display: flex;
     align-items: center;
     gap: var(--space-2);
   }
 
+  .template-select,
   .reminder-select,
   .repeat-type-select,
   .repeat-date-input,
@@ -1865,32 +2196,299 @@ import AppIcon from './AppIcon.vue';
     padding-right: 2px;
   }
 
-  @media (max-width: 920px) {
+  @media (max-width: 1040px) {
+    .task-editor {
+      width: calc(100vw - var(--space-4));
+      height: calc(100vh - var(--space-4));
+      max-height: calc(100vh - var(--space-4));
+    }
+
     .task-editor-body {
       grid-template-columns: 1fr;
+      grid-template-areas:
+        "hero"
+        "side"
+        "main";
+    }
+
+    .editor-side-column {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-2);
+    }
+
+    .due-card,
+    .repeat-card {
+      grid-column: span 2;
+    }
+
+    .desc-textarea,
+    .desc-preview {
+      min-height: 160px;
+      max-height: min(28vh, 260px);
     }
   }
 
   @media (max-width: 720px) {
-
-    .task-editor-header,
-    .task-editor-body {
-      padding: var(--space-3);
+    .task-editor-mask {
+      align-items: stretch;
+      justify-content: stretch;
+      padding: 0;
+      background: var(--color-bg-base);
     }
 
-    .field-grid.two-columns,
+    .task-editor {
+      width: 100vw;
+      height: 100vh;
+      max-height: 100vh;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .task-editor-header {
+      align-items: center;
+      padding: 6px var(--space-2);
+      gap: var(--space-2);
+      min-height: 44px;
+      background: var(--color-bg-elevated);
+      position: sticky;
+      top: 0;
+      z-index: var(--z-sticky);
+    }
+
+    .task-editor-heading {
+      min-width: 0;
+      gap: 0;
+    }
+
+    .task-editor-kicker {
+      display: none;
+    }
+
+    .task-editor-header h2 {
+      font-size: var(--text-lg);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .task-editor-subtitle {
+      font-size: var(--text-xs);
+    }
+
+    .task-editor-body {
+      display: grid;
+      grid-template-columns: 1fr;
+      grid-template-areas:
+        "hero"
+        "side"
+        "main";
+      gap: 6px;
+      padding: 6px;
+      background: var(--color-bg-base);
+    }
+
+    .editor-main-column {
+      display: flex;
+      gap: 6px;
+    }
+
+    .editor-hero-column,
+    .editor-main-column,
+    .editor-side-column {
+      width: 100%;
+    }
+
+    .hero-panel {
+      padding: 8px 10px;
+      gap: var(--space-1);
+      border-radius: var(--radius-md);
+    }
+
+    .editor-side-column {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .content-card,
+    .side-card {
+      padding: 8px;
+      border-radius: var(--radius-md);
+      box-shadow: none;
+    }
+
+    .side-card {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 0;
+    }
+
+    .hero-meta-row {
+      gap: var(--space-1);
+      font-size: var(--text-xs);
+    }
+
+    .meta-pill {
+      min-height: 22px;
+      padding: 0 7px;
+      font-size: var(--text-xs);
+    }
+
+    .meta-separator {
+      display: none;
+    }
+
+    .title-input {
+      min-height: 32px;
+      padding: 4px var(--space-1);
+      font-size: var(--text-lg);
+    }
+
+    .section-heading {
+      margin-bottom: 0;
+      gap: var(--space-2);
+      align-items: center;
+    }
+
+    .section-kicker,
+    .section-hint {
+      display: none;
+    }
+
+    .section-heading h3 {
+      font-size: var(--text-sm);
+    }
+
+    .field-label {
+      font-size: 10px;
+    }
+
+    input,
+    select,
+    textarea,
+    .reminder-select,
+    .repeat-type-select,
+    .repeat-date-input,
+    .interval-input {
+      min-height: 30px;
+      font-size: var(--text-sm);
+    }
+
+    .field-block {
+      gap: 3px;
+    }
+
+    .field-grid {
+      gap: 6px;
+    }
+
+    .field-grid.two-columns {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .desc-textarea,
+    .desc-preview {
+      min-height: 96px;
+      max-height: 160px;
+      padding: var(--space-2);
+    }
+
+    .subtask-list {
+      max-height: 150px;
+    }
+
+    .subtask-item {
+      grid-template-columns: 1fr;
+      align-items: stretch;
+      padding: var(--space-1) var(--space-2);
+      gap: var(--space-1);
+      border-radius: var(--radius-sm);
+    }
+
+    .subtask-status-group,
+    .subtask-actions {
+      justify-content: flex-start;
+    }
+
+    .subtask-delete {
+      padding: 0 var(--space-2);
+      min-height: 28px;
+      font-size: var(--text-xs);
+    }
+
+    .due-card {
+      grid-column: span 2;
+    }
+
+    .due-editor {
+      gap: var(--space-1);
+    }
+
+    .due-row {
+      gap: var(--space-1);
+    }
+
+    .due-field,
+    .due-day-toggle,
+    .due-chip-toggle {
+      min-height: 28px;
+    }
+
+    .chip-input-group {
+      min-height: 30px;
+      padding: 3px 5px;
+    }
+
     .subtask-create-panel {
       grid-template-columns: 1fr;
       display: grid;
     }
 
     .task-editor-footer {
-      flex-direction: column-reverse;
-      align-items: stretch;
+      position: sticky;
+      bottom: 0;
+      z-index: var(--z-sticky);
+      flex-direction: row;
+      align-items: center;
+      padding: var(--space-2);
+      gap: var(--space-2);
+    }
+
+    .task-editor-footer-error,
+    .task-editor-footer-hint {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .task-editor-footer .btn {
-      width: 100%;
+      min-height: 32px;
+      padding: 0 var(--space-3);
+      width: auto;
+      flex-shrink: 0;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .editor-side-column {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .due-card {
+      grid-column: span 2;
+    }
+
+    .task-editor-footer {
+      flex-wrap: nowrap;
+    }
+
+    .task-editor-footer .btn {
+      padding: 0 var(--space-2);
     }
   }
 </style>

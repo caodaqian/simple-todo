@@ -18,7 +18,7 @@ const makeTask = (overrides: { [K in keyof Task]?: Task[K] | undefined } = {}): 
 		reminderOffset: 15,
 		repeat: { type: 'daily', interval: 1, generatedCount: 0 },
 	};
-	const { id, title, status, priority, tags, group, description, subtasks, createdAt, updatedAt, dueDate, reminderOffset, remindedAt, snoozedUntil, repeat } = overrides as Partial<Task>;
+	const { id, parentTaskId, title, status, priority, tags, group, description, subtasks, createdAt, updatedAt, dueDate, reminderOffset, remindedAt, snoozedUntil, repeat } = overrides as Partial<Task>;
 	const result: Task = {
 		id: id ?? base.id,
 		title: title ?? base.title,
@@ -31,6 +31,9 @@ const makeTask = (overrides: { [K in keyof Task]?: Task[K] | undefined } = {}): 
 		createdAt: createdAt ?? base.createdAt,
 		updatedAt: updatedAt ?? base.updatedAt,
 	};
+	if ('parentTaskId' in overrides && parentTaskId !== undefined) {
+		result.parentTaskId = parentTaskId;
+	}
 	if ('dueDate' in overrides) {
 		if (dueDate !== undefined) result.dueDate = dueDate;
 	} else {
@@ -131,6 +134,11 @@ describe('repeatService', () => {
 			expect(next.subtasks).toHaveLength(1);
 			expect(next.subtasks[0]!.id).not.toBe('s1');
 			expect(next.subtasks[0]!.completed).toBe(false);
+		});
+		it('keeps parentTaskId when repeating a child task', () => {
+			const t = makeTask({ status: 'done', parentTaskId: 'parent-1' });
+			const next = buildNextInstance(t, 2000);
+			expect(next.parentTaskId).toBe('parent-1');
 		});
 		it('throws without repeat', () => {
 			expect(() => buildNextInstance(makeTask({ repeat: undefined }), 2000)).toThrow();

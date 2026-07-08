@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import packageJson from '../../package.json';
 import type { Task, UpdateTaskInput } from '../types/task';
+import { STORAGE_KEYS } from './storageKeys';
 import { taskService } from './taskService';
 
 class MockDbStorage {
@@ -31,20 +32,31 @@ const createTaskFixture = (overrides: Partial<Task> = {}): Task => ({
 	tags: ['a'],
 	group: 'g1',
 	description: 'desc',
-	subtasks: [
-		{
-			id: 'sub-1',
-			title: '子任务',
-			completed: false,
-			createdAt: 100,
-			updatedAt: 100,
-		},
-	],
+	subtasks: [],
 	createdAt: 100,
 	updatedAt: 200,
 	dueDate: 300,
 	...overrides,
 });
+
+type TaskServiceWithBackup = typeof taskService & {
+	hasBackup(): boolean;
+	restoreLatestBackup(): boolean;
+};
+
+type TaskServiceWithArchive = typeof taskService & {
+	archive(taskId: string): Task | null;
+	unarchive(taskId: string): Task | null;
+	bulkArchive(taskIds: string[]): number;
+};
+
+type StorageKeysWithBackup = typeof STORAGE_KEYS & {
+	TASKS_BACKUP: string;
+};
+
+const taskServiceWithBackup = taskService as TaskServiceWithBackup;
+const taskServiceWithArchive = taskService as TaskServiceWithArchive;
+const storageKeysWithBackup = STORAGE_KEYS as StorageKeysWithBackup;
 
 describe('taskService', () => {
 	const dbStorage = new MockDbStorage();
@@ -53,6 +65,59 @@ describe('taskService', () => {
 		dbStorage.clear();
 		window.utools = { ...(window.utools ?? {}), dbStorage };
 		vi.restoreAllMocks();
+	});
+
+	it('saves a backup before delete and restores it', () => {
+		vi.spyOn(Date, 'now').mockReturnValue(1000);
+		const a = createTaskFixture({ id: 'a' });
+		const b = createTaskFixture({ id: 'b' });
+		taskService.replaceAll([a, b]);
+
+		expect(taskService.delete('a')).toBe(true);
+
+		expect(taskService.getAll()).toEqual([b]);
+		expect(taskServiceWithBackup.hasBackup()).toBe(true);
+		expect(JSON.parse(dbStorage.getItem<string>(storageKeysWithBackup.TASKS_BACKUP)!)).toEqual({
+			createdAt: 1000,
+			tasks: [a, b],
+		});
+		expect(taskServiceWithBackup.restoreLatestBackup()).toBe(true);
+		expect(taskService.getAll()).toEqual([a, b]);
+	});
+
+	it('saves a backup before bulkDelete and restores it', () => {
+		vi.spyOn(Date, 'now').mockReturnValue(2000);
+		const a = createTaskFixture({ id: 'a' });
+		const b = createTaskFixture({ id: 'b' });
+		const c = createTaskFixture({ id: 'c' });
+		taskService.replaceAll([a, b, c]);
+
+		expect(taskService.bulkDelete(['a', 'c'])).toBe(2);
+
+		expect(taskService.getAll()).toEqual([b]);
+		expect(taskServiceWithBackup.hasBackup()).toBe(true);
+		expect(taskServiceWithBackup.restoreLatestBackup()).toBe(true);
+		expect(taskService.getAll()).toEqual([a, b, c]);
+	});
+
+	it('saves a backup before successful import and restores pre-import tasks', () => {
+		vi.spyOn(Date, 'now').mockReturnValue(3000);
+		const existing = createTaskFixture({ id: 'existing' });
+		const incoming = createTaskFixture({ id: 'incoming', title: '导入任务' });
+		taskService.replaceAll([existing]);
+
+		const result = taskService.importTasks(JSON.stringify([incoming]));
+
+		expect(result).toEqual({ importedCount: 1, duplicateCount: 0, invalidCount: 0 });
+		expect(taskService.getAll()).toEqual([existing, incoming]);
+		expect(taskServiceWithBackup.hasBackup()).toBe(true);
+		expect(taskServiceWithBackup.restoreLatestBackup()).toBe(true);
+		expect(taskService.getAll()).toEqual([existing]);
+	});
+
+	it('returns false when restoring without a backup', () => {
+		expect(taskServiceWithBackup.hasBackup()).toBe(false);
+		expect(taskServiceWithBackup.restoreLatestBackup()).toBe(false);
 	});
 
 	it('exports and imports tasks without losing key fields', () => {
@@ -218,6 +283,135 @@ describe('taskService', () => {
 		expect(taskService.getById(existing.id)).not.toHaveProperty('repeat');
 	});
 
+	it('persists and explicitly clears parentTaskId', () => {
+		const parent = createTaskFixture({ id: 'parent' });
+		taskService.replaceAll([parent]);
+
+		const child = taskService.create({
+			title: '子任务',
+			status: 'todo',
+			priority: 'medium',
+			tags: ['child'],
+			group: 'child-group',
+			description: '',
+			parentTaskId: parent.id,
+		});
+
+		expect(taskService.getById(child.id)?.parentTaskId).toBe(parent.id);
+
+		const updated = taskService.update(child.id, { parentTaskId: undefined } as UpdateTaskInput)!;
+
+		expect(updated).not.toHaveProperty('parentTaskId');
+		expect(taskService.getById(child.id)).not.toHaveProperty('parentTaskId');
+	});
+
+	it('migrates legacy nested subtasks once when reading storage', () => {
+		const legacyParent = createTaskFixture({
+			id: 'parent',
+			priority: 'urgent',
+			tags: ['work', 'urgent'],
+			group: 'project-a',
+			subtasks: [
+				{ id: 'sub-1', title: '旧子任务 1', completed: true, createdAt: 101, updatedAt: 201 },
+				{ id: 'sub-2', title: '旧子任务 2', completed: false, createdAt: 102, updatedAt: 202 },
+			],
+		});
+		dbStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify([legacyParent]));
+
+		const firstRead = taskService.getAll();
+
+		expect(firstRead.map((task) => task.id)).toEqual(['parent', 'sub-1', 'sub-2']);
+		expect(firstRead.find((task) => task.id === 'parent')?.subtasks).toEqual([]);
+		expect(firstRead.find((task) => task.id === 'sub-1')).toMatchObject({
+			parentTaskId: 'parent',
+			title: '旧子任务 1',
+			status: 'done',
+			priority: 'urgent',
+			tags: ['work', 'urgent'],
+			group: 'project-a',
+			description: '',
+			subtasks: [],
+			createdAt: 101,
+			updatedAt: 201,
+		});
+		expect(firstRead.find((task) => task.id === 'sub-2')?.status).toBe('todo');
+
+		const secondRead = taskService.getAll();
+
+		expect(secondRead.map((task) => task.id)).toEqual(['parent', 'sub-1', 'sub-2']);
+		expect(secondRead.filter((task) => task.parentTaskId === 'parent')).toHaveLength(2);
+		expect(JSON.parse(dbStorage.getItem<string>(STORAGE_KEYS.TASKS)!).find((task: Task) => task.id === 'parent').subtasks).toEqual([]);
+	});
+
+	it('addSubtask creates a full child task inheriting parent metadata', () => {
+		vi.spyOn(Date, 'now').mockReturnValue(5000);
+		const parent = createTaskFixture({
+			id: 'parent',
+			priority: 'urgent',
+			tags: ['work'],
+			group: 'project-a',
+		});
+		taskService.replaceAll([parent]);
+
+		const child = taskService.addSubtask(parent.id, '完整子任务')!;
+
+		expect(child).toMatchObject({
+			title: '完整子任务',
+			parentTaskId: parent.id,
+			status: 'todo',
+			priority: 'urgent',
+			tags: ['work'],
+			group: 'project-a',
+			description: '',
+			subtasks: [],
+			completed: false,
+			createdAt: 5000,
+			updatedAt: 5000,
+		});
+		expect(taskService.getById(child.id)).toMatchObject({
+			parentTaskId: parent.id,
+			priority: 'urgent',
+			tags: ['work'],
+			group: 'project-a',
+		});
+		expect(taskService.getById(parent.id)?.subtasks).toEqual([]);
+	});
+
+	it('updateSubtask maps completed to child task status', () => {
+		const parent = createTaskFixture({ id: 'parent' });
+		const child = createTaskFixture({ id: 'child', parentTaskId: parent.id, status: 'todo' });
+		taskService.replaceAll([parent, child]);
+
+		expect(taskService.updateSubtask(parent.id, child.id, true)).toBe(true);
+		expect(taskService.getById(child.id)?.status).toBe('done');
+
+		expect(taskService.updateSubtask(parent.id, child.id, false)).toBe(true);
+		expect(taskService.getById(child.id)?.status).toBe('todo');
+	});
+
+	it('deletes direct child tasks when deleting parent task', () => {
+		const parent = createTaskFixture({ id: 'parent' });
+		const child = createTaskFixture({ id: 'child', parentTaskId: parent.id });
+		const other = createTaskFixture({ id: 'other' });
+		taskService.replaceAll([parent, child, other]);
+
+		expect(taskService.delete(parent.id)).toBe(true);
+
+		expect(taskService.getAll().map((task) => task.id)).toEqual(['other']);
+	});
+
+	it('orders child tasks immediately after their parent task', () => {
+		const parentA = createTaskFixture({ id: 'parent-a' });
+		const parentB = createTaskFixture({ id: 'parent-b' });
+		const childA1 = createTaskFixture({ id: 'child-a-1', parentTaskId: parentA.id });
+		const childA2 = createTaskFixture({ id: 'child-a-2', parentTaskId: parentA.id });
+		const orphan = createTaskFixture({ id: 'orphan', parentTaskId: 'missing-parent' });
+
+		const ordered = taskService.getTasksInParentOrder([childA1, parentB, orphan, parentA, childA2]);
+
+		expect(ordered.map((task) => task.id)).toEqual(['parent-b', 'parent-a', 'child-a-1', 'child-a-2', 'orphan']);
+	});
+
 	it('exposes npm test script for vitest workflow', () => {
 		expect(packageJson.scripts.test).toBe('vitest run');
 	});
@@ -294,6 +488,51 @@ describe('taskService', () => {
 			taskService.replaceAll([a]);
 			expect(taskService.bulkDelete(['nonexistent'])).toBe(0);
 			expect(taskService.getAll()).toHaveLength(1);
+		});
+	});
+
+	describe('archive', () => {
+		it('archives and restores a task without deleting it', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(12_000);
+			const task = createTaskFixture({ id: 'archive-me', updatedAt: 100 });
+			taskService.replaceAll([task]);
+
+			const archived = taskServiceWithArchive.archive(task.id)!;
+
+			expect(archived).toMatchObject({ id: task.id, archivedAt: 12_000, updatedAt: 12_000 });
+			expect(taskService.getById(task.id)).toMatchObject({ archivedAt: 12_000 });
+
+			vi.spyOn(Date, 'now').mockReturnValue(13_000);
+			const restored = taskServiceWithArchive.unarchive(task.id)!;
+
+			expect(restored).not.toHaveProperty('archivedAt');
+			expect(restored.updatedAt).toBe(13_000);
+			expect(taskService.getById(task.id)).not.toHaveProperty('archivedAt');
+		});
+
+		it('bulk archives matched tasks only', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(14_000);
+			const a = createTaskFixture({ id: 'a' });
+			const b = createTaskFixture({ id: 'b' });
+			const c = createTaskFixture({ id: 'c' });
+			taskService.replaceAll([a, b, c]);
+
+			const affected = taskServiceWithArchive.bulkArchive(['a', 'c', 'missing']);
+
+			expect(affected).toBe(2);
+			expect(taskService.getById('a')).toMatchObject({ archivedAt: 14_000, updatedAt: 14_000 });
+			expect(taskService.getById('b')).not.toHaveProperty('archivedAt');
+			expect(taskService.getById('c')).toMatchObject({ archivedAt: 14_000, updatedAt: 14_000 });
+		});
+
+		it('returns null or 0 when archive target is missing', () => {
+			const task = createTaskFixture({ id: 'existing' });
+			taskService.replaceAll([task]);
+
+			expect(taskServiceWithArchive.archive('missing')).toBeNull();
+			expect(taskServiceWithArchive.unarchive('missing')).toBeNull();
+			expect(taskServiceWithArchive.bulkArchive(['missing'])).toBe(0);
+			expect(taskService.getAll()).toEqual([task]);
 		});
 	});
 });

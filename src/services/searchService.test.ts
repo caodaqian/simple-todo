@@ -68,3 +68,23 @@ describe('sortTasks by priority', () => {
 		expect(result.map((t) => t.priority)).toEqual(['urgent', 'high', 'medium', 'low']);
 	});
 });
+
+describe('filter archived tasks', () => {
+	it('默认隐藏已归档任务', () => {
+		const active = createTask({ id: 'active' });
+		const archived = createTask({ id: 'archived', archivedAt: 1000 } as Partial<Task>);
+
+		const result = searchAndSortTasks([active, archived], {});
+
+		expect(result.map((task) => task.id)).toEqual(['active']);
+	});
+
+	it('archived=true 时仅显示已归档任务', () => {
+		const active = createTask({ id: 'active' });
+		const archived = createTask({ id: 'archived', archivedAt: 1000 } as Partial<Task>);
+
+		const result = searchAndSortTasks([active, archived], { archived: true });
+
+		expect(result.map((task) => task.id)).toEqual(['archived']);
+	});
+});
