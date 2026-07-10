@@ -15,7 +15,7 @@ export interface TaskReview {
 	completionRate: number;
 	overdue: number;
 	delayRate: number;
-	dueThisWeek: number;
+	dueNextSevenDays: number;
 	noDueDate: number;
 	focusMinutes: number;
 	byStatus: Record<TaskStatus, number>;
@@ -70,7 +70,7 @@ const buildCompletionTrend = (tasks: Task[], now: number): TrendPoint[] => {
 
 	for (const task of tasks) {
 		if (task.status !== 'done') continue;
-		const completedDay = toDayStart(task.updatedAt);
+		const completedDay = toDayStart(task.completedAt ?? task.updatedAt);
 		if (!counts.has(completedDay)) continue;
 		counts.set(completedDay, (counts.get(completedDay) ?? 0) + 1);
 	}
@@ -86,7 +86,7 @@ export const buildTaskReview = ({ tasks, pomodoros = [], now = Date.now() }: Bui
 	const byStatus: Record<TaskStatus, number> = { todo: 0, doing: 0, done: 0 };
 	const byPriority: Record<TaskPriority, number> = { low: 0, medium: 0, high: 0, urgent: 0 };
 	let overdue = 0;
-	let dueThisWeek = 0;
+	let dueNextSevenDays = 0;
 	let noDueDate = 0;
 
 	for (const task of visibleTasks) {
@@ -98,15 +98,16 @@ export const buildTaskReview = ({ tasks, pomodoros = [], now = Date.now() }: Bui
 		if (isTaskOverdue(task, rules)) {
 			overdue += 1;
 		}
-		if (isTaskInRecentDays(task, rules)) {
-			dueThisWeek += 1;
+		if (task.status !== 'done' && isTaskInRecentDays(task, rules)) {
+			dueNextSevenDays += 1;
 		}
 	}
 
 	const active = byStatus.todo + byStatus.doing;
 	const completed = byStatus.done;
+	const sevenDaysAgo = rules.startOfToday - 6 * 24 * 60 * 60 * 1000;
 	const focusMinutes = pomodoros
-		.filter((session) => session.status === 'finished')
+		.filter((session) => session.status === 'finished' && session.endsAt >= sevenDaysAgo && session.endsAt <= now)
 		.reduce((sum, session) => sum + session.durationMinutes, 0);
 
 	return {
@@ -117,7 +118,7 @@ export const buildTaskReview = ({ tasks, pomodoros = [], now = Date.now() }: Bui
 		completionRate: percent(completed, visibleTasks.length),
 		overdue,
 		delayRate: percent(overdue, active),
-		dueThisWeek,
+		dueNextSevenDays,
 		noDueDate,
 		focusMinutes,
 		byStatus,

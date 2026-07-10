@@ -389,6 +389,18 @@ describe('taskService', () => {
 		expect(taskService.getById(child.id)?.status).toBe('todo');
 	});
 
+	it('records completion time only when a task enters done and clears it when reopened', () => {
+		vi.spyOn(Date, 'now').mockReturnValue(5_000);
+		const task = createTaskFixture({ id: 'completion-time', status: 'todo' });
+		taskService.replaceAll([task]);
+
+		expect(taskService.changeStatus(task.id, 'done')).toMatchObject({ status: 'done', completedAt: 5_000 });
+
+		vi.spyOn(Date, 'now').mockReturnValue(6_000);
+		expect(taskService.update(task.id, { title: '编辑后的任务' })).toMatchObject({ completedAt: 5_000 });
+		expect(taskService.changeStatus(task.id, 'doing')).not.toHaveProperty('completedAt');
+	});
+
 	it('deletes direct child tasks when deleting parent task', () => {
 		const parent = createTaskFixture({ id: 'parent' });
 		const child = createTaskFixture({ id: 'child', parentTaskId: parent.id });
@@ -457,6 +469,19 @@ describe('taskService', () => {
 			expect(getById('a')).toMatchObject({ status: 'done', priority: 'high', group: 'gX', updatedAt: 5000 });
 			expect(getById('b')).toMatchObject({ status: 'done', priority: 'high', group: 'gX', updatedAt: 5000 });
 			expect(getById('c')).toMatchObject({ status: 'done', priority: 'high', group: 'g3', updatedAt: 300 });
+		});
+
+		it('records and clears completion time for bulk status changes', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(5_000);
+			const task = createTaskFixture({ id: 'bulk-completion', status: 'todo' });
+			taskService.replaceAll([task]);
+
+			expect(taskService.bulkUpdate([task.id], { status: 'done' })).toBe(1);
+			expect(taskService.getById(task.id)).toMatchObject({ status: 'done', completedAt: 5_000 });
+
+			vi.spyOn(Date, 'now').mockReturnValue(6_000);
+			expect(taskService.bulkUpdate([task.id], { status: 'todo' })).toBe(1);
+			expect(taskService.getById(task.id)).not.toHaveProperty('completedAt');
 		});
 
 		it('applies partial fields only when provided', () => {

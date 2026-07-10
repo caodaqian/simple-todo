@@ -270,8 +270,11 @@ function completeTaskHandler(dbStorage, params) {
 		throw new Error('未找到任务: ' + taskId);
 	}
 
+	const now = Date.now();
+	const previousStatus = task.status;
 	task.status = 'done';
-	task.updatedAt = Date.now();
+	task.updatedAt = now;
+	if (previousStatus !== 'done') task.completedAt = now;
 
 	// 重复任务：标记完成后自动生成下一实例（参照 src/services/repeatService 口径）
 	if (task.repeat && shouldSpawnNextPure(task)) {
@@ -366,7 +369,10 @@ function updateTaskHandler(dbStorage, params) {
 		else throw new Error('archived 必须是布尔值或 null');
 	}
 
-	task.updatedAt = Date.now();
+	const now = Date.now();
+	task.updatedAt = now;
+	if (previousStatus !== 'done' && task.status === 'done') task.completedAt = now;
+	if (previousStatus === 'done' && task.status !== 'done') delete task.completedAt;
 	if (previousStatus !== 'done' && task.status === 'done' && task.repeat && shouldSpawnNextPure(task)) {
 		const next = buildNextInstancePure(task);
 		task.repeat = next.repeat;
@@ -458,6 +464,7 @@ function updateSubtaskHandler(dbStorage, params) {
 	const subtask = tasks.find(function (t) { return t.id === subtaskId && t.parentTaskId === taskId }) || null;
 	if (!subtask) throw new Error('未找到子任务: ' + subtaskId);
 
+	const previousStatus = subtask.status;
 	if (hasCompleted) subtask.status = Boolean(params.completed) ? 'done' : 'todo';
 	if (hasStatus) subtask.status = params.status;
 	if (hasTitle) subtask.title = params.title.trim();
@@ -470,7 +477,10 @@ function updateSubtaskHandler(dbStorage, params) {
 	if (hasTags) subtask.tags = Array.isArray(params.tags) ? params.tags : [];
 	if (hasGroup) subtask.group = typeof params.group === 'string' ? params.group.trim() : '';
 	if (hasDescription) subtask.description = typeof params.description === 'string' ? params.description : '';
-	subtask.updatedAt = Date.now();
+	const now = Date.now();
+	subtask.updatedAt = now;
+	if (previousStatus !== 'done' && subtask.status === 'done') subtask.completedAt = now;
+	if (previousStatus === 'done' && subtask.status !== 'done') delete subtask.completedAt;
 	task.updatedAt = subtask.updatedAt;
 	writeTasksToDb(dbStorage, tasks);
 
@@ -839,6 +849,8 @@ function bulkUpdateHandler(dbStorage, params) {
 		if (p.archived === true) task.archivedAt = now;
 		if (p.archived === false) delete task.archivedAt;
 		task.updatedAt = now;
+		if (previousStatus !== 'done' && task.status === 'done') task.completedAt = now;
+		if (previousStatus === 'done' && task.status !== 'done') delete task.completedAt;
 		if (previousStatus !== 'done' && task.status === 'done' && task.repeat && shouldSpawnNextPure(task)) {
 			const next = buildNextInstancePure(task, now);
 			task.repeat = next.repeat;
@@ -1314,7 +1326,7 @@ function getReviewHandler(dbStorage) {
 	const byStatus = { todo: 0, doing: 0, done: 0 };
 	const byPriority = { low: 0, medium: 0, high: 0, urgent: 0 };
 	let overdue = 0;
-	let dueThisWeek = 0;
+	let dueNextSevenDays = 0;
 	let noDueDate = 0;
 	visible.forEach(function (task) {
 		if (byStatus[task.status] !== undefined) byStatus[task.status]++;
@@ -1322,7 +1334,7 @@ function getReviewHandler(dbStorage) {
 		const start = getTaskStart(task);
 		const end = getTaskEnd(task);
 		if (start === undefined) noDueDate++;
-		else if (start >= today && start <= weekEnd) dueThisWeek++;
+		else if (task.status !== 'done' && start >= today && start <= weekEnd) dueNextSevenDays++;
 		if (task.status !== 'done' && end !== undefined && end < today) overdue++;
 	});
 	let history = [];
@@ -1331,8 +1343,9 @@ function getReviewHandler(dbStorage) {
 		const parsed = typeof raw === 'string' ? JSON.parse(raw) : [];
 		history = Array.isArray(parsed) ? parsed : [];
 	} catch { history = []; }
+	const sevenDaysAgo = today - 6 * MS_PER_DAY;
 	const focusMinutes = history.reduce(function (sum, session) {
-		return sum + (session && session.status === 'finished' && typeof session.durationMinutes === 'number' ? session.durationMinutes : 0);
+		return sum + (session && session.status === 'finished' && typeof session.durationMinutes === 'number' && typeof session.endsAt === 'number' && session.endsAt >= sevenDaysAgo && session.endsAt <= now ? session.durationMinutes : 0);
 	}, 0);
 	const active = byStatus.todo + byStatus.doing;
 	const completed = byStatus.done;
@@ -1343,13 +1356,13 @@ function getReviewHandler(dbStorage) {
 		const date = new Date(point);
 		trend.push({
 			date: String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0'),
-			count: visible.filter(function (task) { return task.status === 'done' && startOfToday(task.updatedAt) === point; }).length,
+			count: visible.filter(function (task) { return task.status === 'done' && startOfToday(task.completedAt ?? task.updatedAt) === point; }).length,
 		});
 	}
 	return {
 		total: visible.length, active: active, completed: completed, archived: tasks.length - visible.length,
 		completion_rate: percent(completed, visible.length), overdue: overdue, delay_rate: percent(overdue, active),
-		due_this_week: dueThisWeek, no_due_date: noDueDate, focus_minutes: focusMinutes,
+		due_next_seven_days: dueNextSevenDays, no_due_date: noDueDate, focus_minutes: focusMinutes,
 		by_status: byStatus, by_priority: byPriority,
 		top_groups: countValues(visible.map(function (task) { return task.group || ''; })).slice(0, 5),
 		top_tags: countValues(visible.reduce(function (all, task) { return all.concat(task.tags || []); }, [])).slice(0, 5),

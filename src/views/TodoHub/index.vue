@@ -260,21 +260,28 @@ import ListView from '../ListView/index.vue';
     loadTasks();
   };
 
-  const applySmartOrganization = (): void => {
+  const applySmartOrganization = (taskIds: string[]): void => {
     const plan = buildSmartOrganizationPlan(activeTasks.value);
-    if (plan.changes.length === 0) {
-      notifyService.notify('智能整理', '当前任务元数据已较完整');
+    const selectedIds = new Set(taskIds);
+    const selectedChanges = plan.changes.filter((change) => selectedIds.has(change.taskId));
+    if (selectedChanges.length === 0) {
+      notifyService.notify('智能整理', '没有可应用的整理建议');
       return;
     }
 
     let changed = 0;
-    for (const change of plan.changes) {
+    for (const change of selectedChanges) {
       if (taskService.update(change.taskId, change.patch)) {
         changed += 1;
       }
     }
     loadTasks();
     notifyService.notify('智能整理完成', `已整理 ${changed} 项任务`);
+  };
+
+  const handleReviewNavigation = (section: 'overdue' | 'week'): void => {
+    selectSection(section);
+    reviewPanelVisible.value = false;
   };
 
   /* ── External change refresh ──────────────────────────────────── */
@@ -497,7 +504,12 @@ import ListView from '../ListView/index.vue';
           @click="toggleTagFilter(tag.name)">#{{ tag.name }}</span>
       </div>
 
-      <TaskReviewPanel v-if="reviewPanelVisible" :tasks="tasks" @organize="applySmartOrganization" />
+      <TaskReviewPanel
+        v-if="reviewPanelVisible"
+        :tasks="tasks"
+        @navigate="handleReviewNavigation"
+        @organize="applySmartOrganization"
+      />
 
       <!-- Views -->
       <div class="hub-view-container">

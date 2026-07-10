@@ -9,6 +9,8 @@ export interface Subtask {
 	completed: boolean;
 	createdAt: number;
 	updatedAt: number;
+	/** 最近一次标记完成的时间戳；恢复未完成时清除。 */
+	completedAt?: number;
 }
 
 export type RepeatType = 'daily' | 'weekly' | 'monthly' | 'custom';
@@ -47,6 +49,8 @@ export interface Task {
 	subtasks: Subtask[];
 	createdAt: number;
 	updatedAt: number;
+	/** 最近一次标记完成的时间戳；恢复未完成时清除。 */
+	completedAt?: number;
 	/** 提前 dueDate 多少分钟提醒；运行时算 reminderAt = dueDate - offset*60000 */
 	reminderOffset?: number;
 	/** 上次已提醒时间戳；任务被更新后应重置为 undefined */
@@ -79,7 +83,7 @@ export interface TaskTemplate {
 
 type TaskEditableFields = Omit<
 	Task,
-	'id' | 'parentTaskId' | 'createdAt' | 'updatedAt' | 'subtasks' | 'dueDate' | 'dueStart' | 'dueEnd' | 'allDay' | 'remindedAt'
+	'id' | 'parentTaskId' | 'createdAt' | 'updatedAt' | 'completedAt' | 'subtasks' | 'dueDate' | 'dueStart' | 'dueEnd' | 'allDay' | 'remindedAt'
 > & {
 	parentTaskId?: string | undefined;
 	dueDate?: number | undefined;
@@ -90,6 +94,7 @@ type TaskEditableFields = Omit<
 	snoozedUntil?: number | undefined;
 	repeat?: RepeatRule | undefined;
 	archivedAt?: number | undefined;
+	completedAt?: number | undefined;
 	/** 允许在 update 时显式重置 remindedAt（写 undefined） */
 	remindedAt?: number | undefined;
 };
@@ -106,6 +111,7 @@ export type SaveTaskInput = CreateTaskInput & {
 	dueStart?: number | undefined;
 	dueEnd?: number | undefined;
 	allDay?: boolean | undefined;
+	completedAt?: number | undefined;
 };
 
 export type UpdateTaskInput = Partial<

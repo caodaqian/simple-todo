@@ -30,6 +30,7 @@ const {
 	getSettingsHandler,
 	renderMarkdownHandler,
 	bulkUpdateHandler,
+	getReviewHandler,
 	notifyHandler,
 	createTemplateHandler,
 	listTemplatesHandler,
@@ -69,6 +70,7 @@ const {
 	getSettingsHandler: (settingsDb: DbStorage) => unknown;
 	renderMarkdownHandler: (params: Record<string, unknown>, deps: { render: (src: string) => string }) => unknown;
 	bulkUpdateHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		getReviewHandler: (db: DbStorage) => unknown;
 	notifyHandler: (params: Record<string, unknown>, deps: NotifyDeps) => unknown;
 	createTemplateHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
 	listTemplatesHandler: (db: DbStorage) => unknown;
@@ -295,7 +297,8 @@ describe('toolHandlers – pure logic', () => {
 			expect(() => completeTaskHandler(db, { task_id: 'nope' })).toThrow('未找到任务: nope');
 		});
 
-		it('marks status=done and updates timestamp', () => {
+		it('marks status=done and records completion time', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(5_000);
 			const task = seedTask(db, { id: 'c1', title: '完成我', status: 'todo' });
 			const result = completeTaskHandler(db, { task_id: 'c1' }) as { id: string; status: string };
 			expect(result.id).toBe('c1');
@@ -303,6 +306,25 @@ describe('toolHandlers – pure logic', () => {
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
 			const updated = stored.find(t => t.id === task.id);
 			expect(updated!.status).toBe('done');
+			expect(updated!.completedAt).toBe(5_000);
+		});
+	});
+
+	describe('todo_get_review', () => {
+		it('uses completedAt even when its timestamp is zero', () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-07-08T12:00:00Z'));
+			seedTask(db, {
+				id: 'legacy-completion',
+				status: 'done',
+				completedAt: 0,
+				updatedAt: new Date('2026-07-08T10:00:00Z').getTime(),
+			});
+
+			const review = getReviewHandler(db) as { completion_trend: Array<{ date: string; count: number }> };
+
+			expect(review.completion_trend.at(-1)).toEqual({ date: '07-08', count: 0 });
+			vi.useRealTimers();
 		});
 	});
 
@@ -332,6 +354,13 @@ describe('toolHandlers – pure logic', () => {
 			expect(t.status).toBe('todo');
 			expect(t.tags).toEqual(['a']);
 			expect(t.description).toBe('原描述');
+		});
+
+		it('clears completion time when a completed task is reopened', () => {
+			seedTask(db, { id: 'reopen', title: '恢复任务', status: 'done', completedAt: 4_000 });
+			updateTaskHandler(db, { task_id: 'reopen', status: 'doing' });
+			const task = (db.snapshot() as Array<Record<string, unknown>>).find(item => item.id === 'reopen')!;
+			expect(task).not.toHaveProperty('completedAt');
 		});
 
 		it('rejects invalid status, priority, and tags updates', () => {
@@ -1398,7 +1427,7 @@ describe('unified MCP task contract', () => {
 
 	it('returns review metrics and non-mutating organization suggestions', () => {
 		seedTask(db, { id: 'suggest', title: '明天完成项目评审', priority: 'medium', tags: [], group: '' });
-		db.setItem('jianyue.pomodoro.history', JSON.stringify([{ id: 'p1', status: 'finished', durationMinutes: 25 }]));
+		db.setItem('jianyue.pomodoro.history', JSON.stringify([{ id: 'p1', status: 'finished', durationMinutes: 25, endsAt: Date.now() }]));
 		const review = handlers.getReviewHandler(db) as { total: number; focus_minutes: number };
 		expect(review).toMatchObject({ total: 1, focus_minutes: 25 });
 		const plan = handlers.suggestOrganizationHandler(db) as { changes: Array<{ task_id: string; reasons: string[] }> };

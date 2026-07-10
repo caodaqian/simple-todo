@@ -56,13 +56,14 @@ const toRepeatRule = (value: unknown): RepeatRule | undefined => {
 
 type TaskDraft = Omit<
 	Task,
-	'parentTaskId' | 'dueDate' | 'dueStart' | 'dueEnd' | 'allDay' | 'reminderOffset' | 'remindedAt' | 'snoozedUntil' | 'repeat' | 'archivedAt'
+	'parentTaskId' | 'dueDate' | 'dueStart' | 'dueEnd' | 'allDay' | 'completedAt' | 'reminderOffset' | 'remindedAt' | 'snoozedUntil' | 'repeat' | 'archivedAt'
 > & {
 	parentTaskId: string | undefined;
 	dueDate: number | undefined;
 	dueStart?: number | undefined;
 	dueEnd?: number | undefined;
 	allDay?: boolean | undefined;
+	completedAt?: number | undefined;
 	reminderOffset?: number | undefined;
 	remindedAt?: number | undefined;
 	snoozedUntil?: number | undefined;
@@ -75,13 +76,14 @@ type TaskSubtaskCompat = Task & Pick<Subtask, 'completed'>;
 const hasOwn = (value: object, key: PropertyKey): boolean => Object.prototype.hasOwnProperty.call(value, key);
 
 const buildTask = (task: TaskDraft): Task => {
-	const { parentTaskId, dueDate, dueStart, dueEnd, allDay, reminderOffset, remindedAt, snoozedUntil, repeat, archivedAt, ...rest } = task;
+	const { parentTaskId, dueDate, dueStart, dueEnd, allDay, completedAt, reminderOffset, remindedAt, snoozedUntil, repeat, archivedAt, ...rest } = task;
 	const result: Task = { ...rest } as Task;
 	if (parentTaskId !== undefined) result.parentTaskId = parentTaskId;
 	if (dueDate !== undefined) result.dueDate = dueDate;
 	if (dueStart !== undefined) result.dueStart = dueStart;
 	if (dueEnd !== undefined) result.dueEnd = dueEnd;
 	if (allDay !== undefined) result.allDay = allDay;
+	if (completedAt !== undefined) result.completedAt = completedAt;
 	if (reminderOffset !== undefined) result.reminderOffset = reminderOffset;
 	if (remindedAt !== undefined) result.remindedAt = remindedAt;
 	if (snoozedUntil !== undefined) result.snoozedUntil = snoozedUntil;
@@ -111,6 +113,7 @@ const toTask = (value: unknown): Task | null => {
 		subtasks,
 		createdAt,
 		updatedAt,
+		completedAt,
 		reminderOffset,
 		remindedAt,
 		snoozedUntil,
@@ -132,6 +135,7 @@ const toTask = (value: unknown): Task | null => {
 	if (typeof description !== 'string') return null;
 	if (!Array.isArray(subtasks)) return null;
 	if (!isTimestamp(createdAt) || !isTimestamp(updatedAt)) return null;
+	if (completedAt !== undefined && !isTimestamp(completedAt)) return null;
 	if (reminderOffset !== undefined && (typeof reminderOffset !== 'number' || !Number.isFinite(reminderOffset) || reminderOffset < 0)) {
 		return null;
 	}
@@ -185,6 +189,7 @@ const toTask = (value: unknown): Task | null => {
 		subtasks: normalizedSubtasks,
 		createdAt,
 		updatedAt,
+		...(completedAt !== undefined ? { completedAt } : {}),
 		...(dueStart !== undefined ? { dueStart } : {}),
 		...(dueEnd !== undefined ? { dueEnd } : {}),
 		...(allDay !== undefined ? { allDay } : {}),
@@ -344,6 +349,11 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 	const archivedAt = hasOwn(input, 'archivedAt')
 		? input.archivedAt
 		: existing?.archivedAt;
+	const completedAt = input.status === 'done'
+		? existing?.status !== 'done'
+			? now
+			: existing.completedAt
+		: undefined;
 
 	// remindedAt: 输入显式提供则用输入（含 undefined 重置），否则若关键字段（due*/reminderOffset）变更则重置
 	const inputHasRemindedAt = hasOwn(input, 'remindedAt');
@@ -375,6 +385,7 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 	if (dueStart !== undefined) payload.dueStart = dueStart;
 	if (dueEnd !== undefined) payload.dueEnd = dueEnd;
 	if (allDay !== undefined) payload.allDay = allDay;
+	if (completedAt !== undefined) payload.completedAt = completedAt;
 	if (inputHasReminderOffset && input.reminderOffset !== undefined) {
 		payload.reminderOffset = input.reminderOffset;
 	} else if (inputHasReminderOffset && input.reminderOffset === undefined) {
@@ -788,6 +799,11 @@ class TaskService {
 				subtasks: cloneSubtasks(task.subtasks),
 				updatedAt: now,
 			};
+			if (updated.status !== 'done') {
+				Reflect.deleteProperty(updated, 'completedAt');
+			} else if (task.status !== 'done') {
+				updated.completedAt = now;
+			}
 			tasks[i] = updated;
 			if (task.status !== 'done' && updated.status === 'done' && updated.repeat && shouldSpawnNext(updated)) {
 				const next = buildNextInstance(updated);
