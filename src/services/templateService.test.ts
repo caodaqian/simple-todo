@@ -140,19 +140,31 @@ describe('templateService', () => {
 			expect(() => templateService.applyTemplate('ghost')).toThrow('未找到模板: ghost');
 		});
 
-		it('clones subtasks with new ids and uncompleted state', () => {
+		it('creates flat child tasks with new ids and todo state', () => {
 			const tpl = templateService.create({
 				name: 'n', title: 't', priority: 'low',
 				subtasks: [{ id: 's1', title: '子', completed: true, createdAt: 1, updatedAt: 1 }],
 			});
 			const task = templateService.applyTemplate(tpl.id);
-			expect(task.subtasks).toHaveLength(1);
-			expect(task.subtasks[0]!.id).not.toBe('s1');
-			expect(task.subtasks[0]!.completed).toBe(false);
+			expect(task.subtasks).toEqual([]);
+			const child = taskService.getAll().find((candidate) => candidate.parentTaskId === task.id)!;
+			expect(child.id).not.toBe('s1');
+			expect(child.title).toBe('子');
+			expect(child.status).toBe('todo');
 		});
 	});
 
 	describe('persistence round-trip', () => {
+		it('reads MCP templates that store children instead of legacy subtasks', () => {
+			dbStorage.setItem(STORAGE_KEYS.TEMPLATES, JSON.stringify([{
+				...createTemplateFixture(),
+				subtasks: undefined,
+				children: ['准备材料'],
+			}]));
+
+			expect(templateService.list()[0]).toMatchObject({ children: ['准备材料'], subtasks: [] });
+		});
+
 		it('survives re-read from storage with all fields', () => {
 			templateService.create({
 				name: 'n', title: 't', priority: 'medium', tags: ['a', 'b'], group: 'g',

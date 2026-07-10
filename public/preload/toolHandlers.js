@@ -69,10 +69,25 @@ function assertValidParentTask(tasks, parentTaskId, selfTaskId) {
 	}
 	const parent = findTaskById(tasks, parentTaskId);
 	if (!parent) throw new Error('未找到父任务: ' + parentTaskId);
-	if (selfTaskId && parent.parentTaskId === selfTaskId) {
-		throw new Error('不能将直接子任务设置为父任务');
+	if (selfTaskId) {
+		let current = parent;
+		const visited = {};
+		while (current) {
+			if (current.id === selfTaskId) throw new Error('任务层级不能形成循环');
+			if (!current.parentTaskId || visited[current.id]) break;
+			visited[current.id] = true;
+			current = findTaskById(tasks, current.parentTaskId);
+		}
 	}
 	return parentTaskId;
+}
+
+function getTaskStart(task) {
+	return task.dueStart !== undefined ? task.dueStart : task.dueDate;
+}
+
+function getTaskEnd(task) {
+	return task.dueEnd !== undefined ? task.dueEnd : getTaskStart(task);
 }
 
 function toTaskListOutput(t) {
@@ -81,11 +96,15 @@ function toTaskListOutput(t) {
 		title: t.title,
 		status: t.status,
 		priority: t.priority,
-		due_date: formatDate(t.dueDate),
+		due_start: formatDate(getTaskStart(t)),
+		due_end: formatDate(t.dueEnd),
+		all_day: t.allDay === true,
+		due_date: formatDate(getTaskStart(t)),
 		tags: t.tags || [],
 		group: t.group || '',
 		description: t.description || '',
 		parent_task_id: t.parentTaskId,
+		archived: t.archivedAt !== undefined,
 	};
 }
 
@@ -95,7 +114,9 @@ function toChildOutput(t) {
 		title: t.title,
 		status: t.status,
 		priority: t.priority,
-		due_date: formatDate(t.dueDate),
+		due_start: formatDate(getTaskStart(t)),
+		due_end: formatDate(t.dueEnd),
+		all_day: t.allDay === true,
 	};
 }
 
@@ -110,6 +131,55 @@ function parseDate(iso) {
 	return Number.isNaN(ts) ? undefined : ts;
 }
 
+function parseAllDayDate(value) {
+	if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
+	const parts = value.split('-').map(Number);
+	const date = new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0);
+	return date.getFullYear() === parts[0] && date.getMonth() === parts[1] - 1 && date.getDate() === parts[2]
+		? date.getTime() : undefined;
+}
+
+function parseTaskTime(value, allDay) {
+	return allDay ? parseAllDayDate(value) : parseDate(value);
+}
+
+function applyTaskSchedule(task, params) {
+	const hasStart = hasOwn(params, 'due_start');
+	const hasEnd = hasOwn(params, 'due_end');
+	const hasAllDay = hasOwn(params, 'all_day');
+	const allDay = hasAllDay ? params.all_day === true : task.allDay === true;
+	if (hasAllDay && typeof params.all_day !== 'boolean' && params.all_day !== null) {
+		throw new Error('all_day 必须是布尔值或 null');
+	}
+	if (hasStart) {
+		if (params.due_start === null) delete task.dueStart;
+		else {
+			const start = parseTaskTime(params.due_start, allDay);
+			if (start === undefined) throw new Error('due_start 不是合法日期');
+			task.dueStart = start;
+		}
+	}
+	if (hasEnd) {
+		if (params.due_end === null) delete task.dueEnd;
+		else {
+			const end = parseTaskTime(params.due_end, allDay);
+			if (end === undefined) throw new Error('due_end 不是合法日期');
+			task.dueEnd = end;
+		}
+	}
+	if (hasAllDay) {
+		if (params.all_day === null) delete task.allDay;
+		else task.allDay = params.all_day;
+	}
+	if ((hasStart || hasEnd || hasAllDay) && task.dueEnd !== undefined && getTaskStart(task) !== undefined && task.dueEnd < getTaskStart(task)) {
+		throw new Error('due_end 不能早于 due_start');
+	}
+	if (hasStart || hasEnd || hasAllDay) {
+		delete task.dueDate;
+		delete task.remindedAt;
+	}
+}
+
 function createTaskHandler(dbStorage, params) {
 	const title = params && params.title;
 	if (!title || typeof title !== 'string' || !title.trim()) {
@@ -117,9 +187,15 @@ function createTaskHandler(dbStorage, params) {
 	}
 
 	const now = Date.now();
-	const dueDate = parseDate(params.due_date);
+	const allDay = params.all_day === true;
+	if (params.all_day !== undefined && typeof params.all_day !== 'boolean') throw new Error('all_day 必须是布尔值');
+	const dueStart = params.due_start !== undefined ? parseTaskTime(params.due_start, allDay) : parseDate(params.due_date);
+	const dueEnd = params.due_end !== undefined ? parseTaskTime(params.due_end, allDay) : undefined;
+	if (params.due_start !== undefined && dueStart === undefined) throw new Error('due_start 不是合法日期');
+	if (params.due_end !== undefined && dueEnd === undefined) throw new Error('due_end 不是合法日期');
+	if (dueEnd !== undefined && dueStart !== undefined && dueEnd < dueStart) throw new Error('due_end 不能早于 due_start');
 	const reminderOffset = normalizeReminderOffset(params.reminder_offset);
-	if (reminderOffset !== undefined && dueDate === undefined) {
+	if (reminderOffset !== undefined && dueStart === undefined) {
 		throw new Error('设置提醒需要先有截止日期');
 	}
 	const repeat = normalizeRepeatRule(params.repeat);
@@ -129,7 +205,6 @@ function createTaskHandler(dbStorage, params) {
 		id: generateId(),
 		title: title.trim(),
 		status: 'todo',
-		dueDate: dueDate,
 		priority: isTaskPriority(params.priority) ? params.priority : 'medium',
 		tags: Array.isArray(params.tags) ? params.tags : [],
 		group: typeof params.group === 'string' ? params.group.trim() : '',
@@ -140,9 +215,9 @@ function createTaskHandler(dbStorage, params) {
 		updatedAt: now,
 	};
 
-	if (task.dueDate === undefined) {
-		delete task.dueDate;
-	}
+	if (dueStart !== undefined) task.dueStart = dueStart;
+	if (dueEnd !== undefined) task.dueEnd = dueEnd;
+	if (params.all_day === true) task.allDay = true;
 	if (parentTaskId !== undefined) task.parentTaskId = parentTaskId;
 	if (reminderOffset !== undefined) task.reminderOffset = reminderOffset;
 	if (repeat !== undefined) task.repeat = repeat;
@@ -154,7 +229,7 @@ function createTaskHandler(dbStorage, params) {
 }
 
 function listTasksHandler(dbStorage, params) {
-	let tasks = readTasksFromDb(dbStorage);
+	let tasks = readTasksFromDb(dbStorage).filter(function (task) { return task.archivedAt === undefined; });
 	const p = params || {};
 
 	if (p.status) {
@@ -223,7 +298,11 @@ function updateTaskHandler(dbStorage, params) {
 		throw new Error('未找到任务: ' + taskId);
 	}
 
-	if (params.title !== undefined) task.title = params.title;
+	const previousStatus = task.status;
+	if (params.title !== undefined) {
+		if (typeof params.title !== 'string' || !params.title.trim()) throw new Error('任务标题不能为空');
+		task.title = params.title.trim();
+	}
 	if (params.status !== undefined) {
 		if (!isTaskStatus(params.status)) throw new Error('任务状态无效');
 		task.status = params.status;
@@ -238,23 +317,31 @@ function updateTaskHandler(dbStorage, params) {
 		}
 		task.tags = params.tags.slice();
 	}
+	if (params.group !== undefined) {
+		if (typeof params.group !== 'string') throw new Error('group 必须是字符串');
+		task.group = params.group.trim();
+	}
 	if (params.description !== undefined) task.description = params.description;
 	if (hasOwn(params, 'parent_task_id')) {
 		const parentTaskId = assertValidParentTask(tasks, params.parent_task_id, task.id);
 		if (parentTaskId === undefined) delete task.parentTaskId;
 		else task.parentTaskId = parentTaskId;
 	}
-	if (params.due_date !== undefined) {
+	if (params.due_date !== undefined && !hasOwn(params, 'due_start')) {
 		const parsed = parseDate(params.due_date);
 		if (parsed !== undefined) {
-			task.dueDate = parsed;
+			task.dueStart = parsed;
+			delete task.dueDate;
 		} else {
+			delete task.dueStart;
 			delete task.dueDate;
 		}
+		delete task.remindedAt;
 	}
-	if (params.reminder_offset !== undefined) {
+	applyTaskSchedule(task, params);
+	if (hasOwn(params, 'reminder_offset')) {
 		const offset = normalizeReminderOffset(params.reminder_offset);
-		if (offset !== undefined && task.dueDate === undefined) {
+		if (offset !== undefined && getTaskStart(task) === undefined) {
 			throw new Error('设置提醒需要先有截止日期');
 		}
 		if (offset === undefined) {
@@ -265,7 +352,7 @@ function updateTaskHandler(dbStorage, params) {
 		// 提醒设置变更后重置 remindedAt
 		delete task.remindedAt;
 	}
-	if (params.repeat !== undefined) {
+	if (hasOwn(params, 'repeat')) {
 		const rule = normalizeRepeatRule(params.repeat);
 		if (rule === undefined) {
 			delete task.repeat;
@@ -273,8 +360,18 @@ function updateTaskHandler(dbStorage, params) {
 			task.repeat = rule;
 		}
 	}
+	if (hasOwn(params, 'archived')) {
+		if (params.archived === true) task.archivedAt = Date.now();
+		else if (params.archived === false || params.archived === null) delete task.archivedAt;
+		else throw new Error('archived 必须是布尔值或 null');
+	}
 
 	task.updatedAt = Date.now();
+	if (previousStatus !== 'done' && task.status === 'done' && task.repeat && shouldSpawnNextPure(task)) {
+		const next = buildNextInstancePure(task);
+		task.repeat = next.repeat;
+		tasks.push(next);
+	}
 	writeTasksToDb(dbStorage, tasks);
 
 	return { id: task.id, title: task.title, status: task.status, parent_task_id: task.parentTaskId };
@@ -409,6 +506,10 @@ function asArray(value) {
 function searchTasksHandler(dbStorage, params) {
 	const p = params || {};
 	let tasks = readTasksFromDb(dbStorage);
+	if (p.archived === true) tasks = tasks.filter(function (t) { return t.archivedAt !== undefined; });
+	else tasks = tasks.filter(function (t) { return t.archivedAt === undefined; });
+	if (typeof p.parent_task_id === 'string') tasks = tasks.filter(function (t) { return t.parentTaskId === p.parent_task_id; });
+	if (p.root_only === true) tasks = tasks.filter(function (t) { return !t.parentTaskId; });
 
 	const statusFilter = asArray(p.status);
 	if (statusFilter.length) {
@@ -448,9 +549,11 @@ function searchTasksHandler(dbStorage, params) {
 	if (hasDateFilter) {
 		const includeNoDue = p.include_no_due === true;
 		tasks = tasks.filter(function (t) {
-			if (t.dueDate === undefined) return includeNoDue;
-			if (dueAfter !== undefined && t.dueDate < dueAfter) return false;
-			if (dueBefore !== undefined && t.dueDate > dueBefore) return false;
+			const start = getTaskStart(t);
+			const end = getTaskEnd(t);
+			if (start === undefined) return includeNoDue;
+			if (dueAfter !== undefined && (end === undefined || end < dueAfter)) return false;
+			if (dueBefore !== undefined && start > dueBefore) return false;
 			return true;
 		});
 	}
@@ -466,8 +569,8 @@ function searchTasksHandler(dbStorage, params) {
 			av = priorityRank[a.priority] || 0;
 			bv = priorityRank[b.priority] || 0;
 		} else if (sortBy === 'dueDate') {
-			av = a.dueDate === undefined ? Infinity : a.dueDate;
-			bv = b.dueDate === undefined ? Infinity : b.dueDate;
+			av = getTaskStart(a) === undefined ? Infinity : getTaskStart(a);
+			bv = getTaskStart(b) === undefined ? Infinity : getTaskStart(b);
 		}
 		if (av === bv) return 0;
 		return order === 'asc' ? (av < bv ? -1 : 1) : (av > bv ? -1 : 1);
@@ -493,7 +596,7 @@ function startOfToday(now) {
 
 function taskOverviewHandler(dbStorage, params) {
 	const p = params || {};
-	let tasks = readTasksFromDb(dbStorage);
+	let tasks = readTasksFromDb(dbStorage).filter(function (task) { return task.archivedAt === undefined; });
 	if (p.group) {
 		tasks = tasks.filter(function (t) { return t.group === p.group });
 	}
@@ -510,11 +613,13 @@ function taskOverviewHandler(dbStorage, params) {
 	tasks.forEach(function (t) {
 		if (byStatus[t.status] !== undefined) byStatus[t.status]++;
 		if (byPriority[t.priority] !== undefined) byPriority[t.priority]++;
-		if (t.dueDate === undefined) {
+		const start = getTaskStart(t);
+		const end = getTaskEnd(t);
+		if (start === undefined) {
 			noDueDate++;
 		} else {
-			if (t.dueDate >= todayStart && t.dueDate <= todayEnd) dueToday++;
-			if (t.dueDate < now && t.status !== 'done') overdue++;
+			if (start >= todayStart && start <= todayEnd) dueToday++;
+			if (end < todayStart && t.status !== 'done') overdue++;
 		}
 	});
 
@@ -525,6 +630,8 @@ function taskOverviewHandler(dbStorage, params) {
 		overdue: overdue,
 		dueToday: dueToday,
 		noDueDate: noDueDate,
+		tags: countValues(tasks.reduce(function (all, task) { return all.concat(task.tags || []); }, [])),
+		groups: countValues(tasks.map(function (task) { return task.group || ''; })),
 	};
 }
 
@@ -628,20 +735,17 @@ function getTaskHandler(dbStorage, params) {
 		title: task.title,
 		status: task.status,
 		priority: task.priority,
-		due_date: formatDate(task.dueDate),
+		due_start: formatDate(getTaskStart(task)),
+		due_end: formatDate(task.dueEnd),
+		all_day: task.allDay === true,
+		due_date: formatDate(getTaskStart(task)),
 		tags: task.tags || [],
 		group: task.group || '',
 		description: task.description || '',
-		subtasks: (task.subtasks || []).map(function (s) {
-			return {
-				id: s.id,
-				title: s.title,
-				completed: Boolean(s.completed),
-				created_at: formatDate(s.createdAt),
-				updated_at: formatDate(s.updatedAt),
-			};
-		}),
 		children: getDirectChildren(tasks, task.id).map(toChildOutput),
+		archived: task.archivedAt !== undefined,
+		reminder_offset: task.reminderOffset,
+		repeat: task.repeat,
 		created_at: formatDate(task.createdAt),
 		updated_at: formatDate(task.updatedAt),
 	};
@@ -709,8 +813,12 @@ function bulkUpdateHandler(dbStorage, params) {
 	if (ids.length > BULK_UPDATE_MAX) {
 		throw new Error('单次最多更新 ' + BULK_UPDATE_MAX + ' 个任务');
 	}
-	const hasUpdate = p.status !== undefined || p.priority !== undefined || p.group !== undefined;
-	if (!hasUpdate) throw new Error('至少需要提供 status、priority 或 group 之一');
+	const hasUpdate = p.status !== undefined || p.priority !== undefined || p.group !== undefined || p.archived !== undefined;
+	if (!hasUpdate) throw new Error('至少需要提供 status、priority、group 或 archived 之一');
+	if (p.status !== undefined && !isTaskStatus(p.status)) throw new Error('任务状态无效');
+	if (p.priority !== undefined && !isTaskPriority(p.priority)) throw new Error('任务优先级无效');
+	if (p.group !== undefined && typeof p.group !== 'string') throw new Error('group 必须是字符串');
+	if (p.archived !== undefined && typeof p.archived !== 'boolean') throw new Error('archived 必须是布尔值');
 
 	const tasks = readTasksFromDb(dbStorage);
 	const byId = {};
@@ -724,10 +832,18 @@ function bulkUpdateHandler(dbStorage, params) {
 			notFound.push(id);
 			return;
 		}
+		const previousStatus = task.status;
 		if (p.status !== undefined) task.status = p.status;
 		if (p.priority !== undefined) task.priority = p.priority;
 		if (p.group !== undefined) task.group = p.group;
+		if (p.archived === true) task.archivedAt = now;
+		if (p.archived === false) delete task.archivedAt;
 		task.updatedAt = now;
+		if (previousStatus !== 'done' && task.status === 'done' && task.repeat && shouldSpawnNextPure(task)) {
+			const next = buildNextInstancePure(task, now);
+			task.repeat = next.repeat;
+			tasks.push(next);
+		}
 		updated++;
 	});
 	if (updated > 0) writeTasksToDb(dbStorage, tasks);
@@ -798,7 +914,7 @@ function normalizeRepeatRule(value) {
 function computeNextDueDate(task, now) {
 	const rule = task.repeat;
 	if (!rule) throw new Error('任务无重复规则');
-	const base = task.dueDate !== undefined ? task.dueDate : (now || Date.now());
+	const base = getTaskStart(task) !== undefined ? getTaskStart(task) : (now || Date.now());
 	switch (rule.type) {
 		case 'daily':
 		case 'custom':
@@ -859,7 +975,14 @@ function buildNextInstancePure(task, now) {
 		updatedAt: ts,
 		repeat: nextRepeat,
 	};
-	if (task.dueDate !== undefined) next.dueDate = nextDue;
+	if (task.parentTaskId !== undefined) next.parentTaskId = task.parentTaskId;
+	if (task.allDay !== undefined) next.allDay = task.allDay;
+	if (task.dueStart !== undefined) {
+		next.dueStart = nextDue;
+		if (task.dueEnd !== undefined) next.dueEnd = nextDue + (task.dueEnd - task.dueStart);
+	} else if (task.dueDate !== undefined) {
+		next.dueStart = nextDue;
+	}
 	if (task.reminderOffset !== undefined) next.reminderOffset = task.reminderOffset;
 	return next;
 }
@@ -898,7 +1021,7 @@ function toTemplateOutput(tpl) {
 		tags: tpl.tags || [],
 		group: tpl.group || '',
 		description: tpl.description || '',
-		subtasks: tpl.subtasks || [],
+		children: Array.isArray(tpl.children) ? tpl.children : (tpl.subtasks || []).map(function (subtask) { return subtask.title; }),
 		reminder_offset: tpl.reminderOffset,
 		repeat: tpl.repeat,
 		created_at: formatDate(tpl.createdAt),
@@ -923,7 +1046,7 @@ function createTemplateHandler(dbStorage, params) {
 		tags: Array.isArray(params.tags) ? params.tags : [],
 		group: typeof params.group === 'string' ? params.group.trim() : '',
 		description: typeof params.description === 'string' ? params.description : '',
-		subtasks: Array.isArray(params.subtasks) ? params.subtasks : [],
+		children: Array.isArray(params.children) ? params.children.filter(function (title) { return typeof title === 'string' && title.trim(); }).map(function (title) { return title.trim(); }) : [],
 		createdAt: now,
 		updatedAt: now,
 	};
@@ -938,6 +1061,52 @@ function createTemplateHandler(dbStorage, params) {
 function listTemplatesHandler(dbStorage) {
 	const list = readTemplatesFromDb(dbStorage);
 	return { templates: list.map(toTemplateOutput) };
+}
+
+function updateTemplateHandler(dbStorage, params) {
+	const id = params && params.template_id;
+	if (!id) throw new Error('template_id 不能为空');
+	const templates = readTemplatesFromDb(dbStorage);
+	const template = templates.find(function (item) { return item.id === id; });
+	if (!template) throw new Error('未找到模板: ' + id);
+	if (hasOwn(params, 'name')) {
+		if (typeof params.name !== 'string' || !params.name.trim()) throw new Error('模板名称不能为空');
+		template.name = params.name.trim();
+	}
+	if (hasOwn(params, 'title')) {
+		if (typeof params.title !== 'string' || !params.title.trim()) throw new Error('模板标题不能为空');
+		template.title = params.title.trim();
+	}
+	if (hasOwn(params, 'priority')) {
+		if (!isTaskPriority(params.priority)) throw new Error('任务优先级无效');
+		template.priority = params.priority;
+	}
+	if (hasOwn(params, 'tags')) {
+		if (!Array.isArray(params.tags) || params.tags.some(function (tag) { return typeof tag !== 'string'; })) throw new Error('tags 必须为字符串数组');
+		template.tags = params.tags.slice();
+	}
+	if (hasOwn(params, 'group')) {
+		if (typeof params.group !== 'string') throw new Error('group 必须是字符串');
+		template.group = params.group.trim();
+	}
+	if (hasOwn(params, 'description')) template.description = typeof params.description === 'string' ? params.description : '';
+	if (hasOwn(params, 'children')) {
+		if (!Array.isArray(params.children) || params.children.some(function (title) { return typeof title !== 'string' || !title.trim(); })) throw new Error('children 必须是非空字符串数组');
+		template.children = params.children.map(function (title) { return title.trim(); });
+	}
+	if (hasOwn(params, 'reminder_offset')) {
+		const offset = normalizeReminderOffset(params.reminder_offset);
+		if (offset === undefined) delete template.reminderOffset;
+		else template.reminderOffset = offset;
+	}
+	if (hasOwn(params, 'repeat')) {
+		const rule = normalizeRepeatRule(params.repeat);
+		if (rule === undefined) delete template.repeat;
+		else template.repeat = rule;
+	}
+	template.updatedAt = Date.now();
+	writeTemplatesToDb(dbStorage, templates);
+	return { template_id: template.id, name: template.name };
 }
 
 function deleteTemplateHandler(dbStorage, params) {
@@ -960,7 +1129,12 @@ function applyTemplateHandler(dbStorage, params) {
 	const title = (params.title && typeof params.title === 'string') ? params.title.trim() : tpl.title;
 	const tags = Array.isArray(params.tags) ? params.tags : (tpl.tags || []).slice();
 	const group = (params.group && typeof params.group === 'string') ? params.group.trim() : (tpl.group || '');
-	const dueDate = parseDate(params.due_date);
+	const allDay = params.all_day === true;
+	const dueStart = params.due_start !== undefined ? parseTaskTime(params.due_start, allDay) : parseDate(params.due_date);
+	const dueEnd = params.due_end !== undefined ? parseTaskTime(params.due_end, allDay) : undefined;
+	if (params.due_start !== undefined && dueStart === undefined) throw new Error('due_start 不是合法日期');
+	if (params.due_end !== undefined && dueEnd === undefined) throw new Error('due_end 不是合法日期');
+	if (dueEnd !== undefined && dueStart !== undefined && dueEnd < dueStart) throw new Error('due_end 不能早于 due_start');
 
 	const now = Date.now();
 	const task = {
@@ -971,24 +1145,27 @@ function applyTemplateHandler(dbStorage, params) {
 		tags: tags,
 		group: group,
 		description: tpl.description || '',
-		subtasks: (tpl.subtasks || []).map(function (s) {
-			return {
-				id: generateId(),
-				title: s.title,
-				completed: false,
-				createdAt: now,
-				updatedAt: now,
-			};
-		}),
+		subtasks: [],
 		createdAt: now,
 		updatedAt: now,
 	};
-	if (dueDate !== undefined) task.dueDate = dueDate;
+	if (dueStart !== undefined) task.dueStart = dueStart;
+	if (dueEnd !== undefined) task.dueEnd = dueEnd;
+	if (params.all_day === true) task.allDay = true;
 	if (tpl.reminderOffset !== undefined) task.reminderOffset = tpl.reminderOffset;
 	if (tpl.repeat !== undefined) task.repeat = tpl.repeat;
 
 	const tasks = readTasksFromDb(dbStorage);
 	tasks.push(task);
+	const childTitles = Array.isArray(tpl.children) ? tpl.children : (tpl.subtasks || []).map(function (subtask) { return subtask.title; });
+	childTitles.forEach(function (childTitle) {
+		if (typeof childTitle !== 'string' || !childTitle.trim()) return;
+		tasks.push({
+			id: generateId(), title: childTitle.trim(), status: 'todo', priority: task.priority,
+			tags: task.tags.slice(), group: task.group, description: '', subtasks: [], parentTaskId: task.id,
+			createdAt: now, updatedAt: now,
+		});
+	});
 	writeTasksToDb(dbStorage, tasks);
 
 	return { task_id: task.id, title: task.title };
@@ -1004,7 +1181,7 @@ function setReminderHandler(dbStorage, params) {
 	const tasks = readTasksFromDb(dbStorage);
 	const task = findTaskById(tasks, taskId);
 	if (!task) throw new Error('未找到任务: ' + taskId);
-	if (task.dueDate === undefined) throw new Error('设置提醒需要先有截止日期');
+	if (getTaskStart(task) === undefined) throw new Error('设置提醒需要先有截止日期');
 
 	if (offset === undefined) {
 		delete task.reminderOffset;
@@ -1037,6 +1214,18 @@ function snoozeReminderHandler(dbStorage, params) {
 	return { task_id: task.id, snoozed_until: formatDate(task.snoozedUntil) };
 }
 
+function acknowledgeReminderHandler(dbStorage, params) {
+	const taskId = params && params.task_id;
+	if (!taskId) throw new Error('task_id 不能为空');
+	const tasks = readTasksFromDb(dbStorage);
+	const task = findTaskById(tasks, taskId);
+	if (!task) throw new Error('未找到任务: ' + taskId);
+	task.remindedAt = Date.now();
+	task.updatedAt = task.remindedAt;
+	writeTasksToDb(dbStorage, tasks);
+	return { task_id: task.id, acknowledged: true };
+}
+
 function dismissReminderHandler(dbStorage, params) {
 	const taskId = params && params.task_id;
 	if (!taskId) throw new Error('task_id 不能为空');
@@ -1056,9 +1245,10 @@ function dismissReminderHandler(dbStorage, params) {
 // ── List due reminders (read-only query) ──────────────────────────────
 
 function computeReminderAtPure(task) {
-	if (task.dueDate === undefined) return undefined;
+	const start = getTaskStart(task);
+	if (start === undefined) return undefined;
 	const offset = task.reminderOffset || 0;
-	return task.dueDate - offset * MS_PER_MINUTE;
+	return start - offset * MS_PER_MINUTE;
 }
 
 function listDueRemindersHandler(dbStorage, params) {
@@ -1069,13 +1259,14 @@ function listDueRemindersHandler(dbStorage, params) {
 
 	const result = [];
 	for (const task of tasks) {
+		if (task.archivedAt !== undefined) continue;
 		if (task.status === 'done') continue;
 		if (task.remindedAt !== undefined) continue;
 		if (task.snoozedUntil !== undefined && task.snoozedUntil > now) continue;
 
 		const reminderAt = computeReminderAtPure(task);
 		const dueReminder = reminderAt !== undefined && reminderAt <= now;
-		const overdue = includeOverdue && task.dueDate !== undefined && task.dueDate <= now;
+		const overdue = includeOverdue && getTaskEnd(task) !== undefined && getTaskEnd(task) <= now;
 		if (!dueReminder && !overdue) continue;
 
 		result.push({
@@ -1083,7 +1274,9 @@ function listDueRemindersHandler(dbStorage, params) {
 			title: task.title,
 			status: task.status,
 			priority: task.priority,
-			due_date: formatDate(task.dueDate),
+			due_start: formatDate(getTaskStart(task)),
+			due_end: formatDate(task.dueEnd),
+			due_date: formatDate(getTaskStart(task)),
 			reminder_at: formatDate(reminderAt),
 			snoozed_until: formatDate(task.snoozedUntil),
 		});
@@ -1098,6 +1291,100 @@ function listDueRemindersHandler(dbStorage, params) {
 	const limit = typeof p.limit === 'number' && p.limit > 0 ? p.limit : 50;
 	const sliced = result.slice(0, limit);
 	return { reminders: sliced, total: result.length };
+}
+
+function countValues(values) {
+	const counts = {};
+	values.forEach(function (value) {
+		if (typeof value !== 'string' || !value.trim()) return;
+		const key = value.trim();
+		counts[key] = (counts[key] || 0) + 1;
+	});
+	return Object.keys(counts).map(function (name) { return { name: name, count: counts[name] }; }).sort(function (a, b) {
+		return b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN');
+	});
+}
+
+function getReviewHandler(dbStorage) {
+	const tasks = readTasksFromDb(dbStorage);
+	const visible = tasks.filter(function (task) { return task.archivedAt === undefined; });
+	const now = Date.now();
+	const today = startOfToday(now);
+	const weekEnd = today + 7 * MS_PER_DAY - 1;
+	const byStatus = { todo: 0, doing: 0, done: 0 };
+	const byPriority = { low: 0, medium: 0, high: 0, urgent: 0 };
+	let overdue = 0;
+	let dueThisWeek = 0;
+	let noDueDate = 0;
+	visible.forEach(function (task) {
+		if (byStatus[task.status] !== undefined) byStatus[task.status]++;
+		if (byPriority[task.priority] !== undefined) byPriority[task.priority]++;
+		const start = getTaskStart(task);
+		const end = getTaskEnd(task);
+		if (start === undefined) noDueDate++;
+		else if (start >= today && start <= weekEnd) dueThisWeek++;
+		if (task.status !== 'done' && end !== undefined && end < today) overdue++;
+	});
+	let history = [];
+	try {
+		const raw = dbStorage.getItem('jianyue.pomodoro.history');
+		const parsed = typeof raw === 'string' ? JSON.parse(raw) : [];
+		history = Array.isArray(parsed) ? parsed : [];
+	} catch { history = []; }
+	const focusMinutes = history.reduce(function (sum, session) {
+		return sum + (session && session.status === 'finished' && typeof session.durationMinutes === 'number' ? session.durationMinutes : 0);
+	}, 0);
+	const active = byStatus.todo + byStatus.doing;
+	const completed = byStatus.done;
+	const percent = function (part, total) { return total ? Math.round(part * 100 / total) : 0; };
+	const trend = [];
+	for (let day = 6; day >= 0; day--) {
+		const point = today - day * MS_PER_DAY;
+		const date = new Date(point);
+		trend.push({
+			date: String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0'),
+			count: visible.filter(function (task) { return task.status === 'done' && startOfToday(task.updatedAt) === point; }).length,
+		});
+	}
+	return {
+		total: visible.length, active: active, completed: completed, archived: tasks.length - visible.length,
+		completion_rate: percent(completed, visible.length), overdue: overdue, delay_rate: percent(overdue, active),
+		due_this_week: dueThisWeek, no_due_date: noDueDate, focus_minutes: focusMinutes,
+		by_status: byStatus, by_priority: byPriority,
+		top_groups: countValues(visible.map(function (task) { return task.group || ''; })).slice(0, 5),
+		top_tags: countValues(visible.reduce(function (all, task) { return all.concat(task.tags || []); }, [])).slice(0, 5),
+		completion_trend: trend,
+	};
+}
+
+function suggestOrganizationHandler(dbStorage, params) {
+	const now = params && typeof params.now === 'number' ? params.now : Date.now();
+	const tomorrow = new Date(now);
+	tomorrow.setDate(tomorrow.getDate() + 1);
+	tomorrow.setHours(0, 0, 0, 0);
+	const changes = [];
+	let skipped = 0;
+	readTasksFromDb(dbStorage).forEach(function (task) {
+		if (task.archivedAt !== undefined || task.status === 'done') { skipped++; return; }
+		const text = String(task.title || '') + ' ' + String(task.description || '');
+		const patch = {};
+		const reasons = [];
+		if (task.priority === 'medium') {
+			if (/(紧急|马上|立刻|今天|线上|阻塞|critical|urgent|asap)/i.test(text)) { patch.priority = 'urgent'; reasons.push('识别优先级：urgent'); }
+			else if (/(重要|本周|高优|发布|截止|评审|high)/i.test(text)) { patch.priority = 'high'; reasons.push('识别优先级：high'); }
+			else if (/(有空|以后|低优|可选|low)/i.test(text)) { patch.priority = 'low'; reasons.push('识别优先级：low'); }
+		}
+		if (!String(task.group || '').trim()) {
+			if (/(需求|评审|迭代|发布|上线|项目|会议|同步|沟通|复盘|周会|站会|bug|缺陷|报错|修复)/i.test(text)) { patch.group = '工作'; reasons.push('补充分组：工作'); }
+			else if (/(学习|阅读|课程|读书|研究|调研)/i.test(text)) { patch.group = '学习'; reasons.push('补充分组：学习'); }
+			else if (/(运动|健身|跑步|体检|医生|健康|买|采购|缴费|快递|家务|做饭)/i.test(text)) { patch.group = '生活'; reasons.push('补充分组：生活'); }
+		}
+		if ((!task.tags || task.tags.length === 0) && /(项目|评审|发布|上线)/i.test(text)) { patch.tags = ['项目']; reasons.push('补充标签：项目'); }
+		if (getTaskStart(task) === undefined && /明天/.test(text)) { patch.due_start = tomorrow.getTime(); patch.all_day = true; reasons.push('识别截止日期'); }
+		if (Object.keys(patch).length) changes.push({ task_id: task.id, title: task.title, patch: patch, reasons: reasons });
+		else skipped++;
+	});
+	return { changes: changes, skipped: skipped };
 }
 
 module.exports = {
@@ -1141,8 +1428,12 @@ module.exports = {
 	listTemplatesHandler,
 	deleteTemplateHandler,
 	applyTemplateHandler,
+	updateTemplateHandler,
 	setReminderHandler,
 	snoozeReminderHandler,
 	dismissReminderHandler,
+	acknowledgeReminderHandler,
 	listDueRemindersHandler,
+	getReviewHandler,
+	suggestOrganizationHandler,
 };

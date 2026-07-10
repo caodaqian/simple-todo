@@ -67,6 +67,9 @@ export interface TaskTemplate {
 	tags: string[];
 	group: string;
 	description: string;
+	/** 模板套用时创建为完整子任务的标题列表。 */
+	children?: string[];
+	/** @deprecated 使用 children；保留以读取历史模板。 */
 	subtasks: Subtask[];
 	reminderOffset?: number;
 	repeat?: RepeatRule;

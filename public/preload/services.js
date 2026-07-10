@@ -11,44 +11,23 @@ const {
   readTasksFromDb: readTasksFromDbPure,
   writeTasksToDb: writeTasksToDbPure,
   createTaskHandler,
-  listTasksHandler,
-  completeTaskHandler,
   updateTaskHandler,
   deleteTaskHandler,
-  addSubtaskHandler,
-  updateSubtaskHandler,
-  deleteSubtaskHandler,
   searchTasksHandler,
   taskOverviewHandler,
-  listTagsHandler,
-  listGroupsHandler,
-  exportTasksHandler,
-  importTasksHandler,
   getTaskHandler,
-  getSettingsHandler,
-  renderMarkdownHandler,
   bulkUpdateHandler,
-  notifyHandler,
   createTemplateHandler,
   listTemplatesHandler,
+  updateTemplateHandler,
   deleteTemplateHandler,
   applyTemplateHandler,
-  setReminderHandler,
   snoozeReminderHandler,
-  dismissReminderHandler,
+  acknowledgeReminderHandler,
   listDueRemindersHandler,
+  getReviewHandler,
+  suggestOrganizationHandler,
 } = require('./toolHandlers')
-
-// marked is used by the todo_render_markdown MCP tool. preload is a Node
-// CommonJS environment, so require() works. The handler does not perform
-// XSS sanitization (no DOMPurify in Node); consumers must sanitize if they
-// render the returned HTML in a browser context.
-let markedRenderer = null
-try {
-  markedRenderer = require('marked').marked
-} catch {
-  markedRenderer = null
-}
 
 // ── dbStorage accessor ────────────────────────────────────────────────
 function db() {
@@ -141,95 +120,43 @@ window.services = {
 }
 
 // ── MCP Tool Registration ─────────────────────────────────────────────
-// Must be at top level, NOT inside onPluginEnter (AI Agent calls don't trigger onPluginEnter)
-// All tools use the `todo_` prefix to avoid collisions with other plugins' MCP tools.
+// Must be at top level, NOT inside onPluginEnter (AI Agent calls don't trigger onPluginEnter).
 window.utools.registerTool('todo_create_task', withNotify(createTaskHandler))
-window.utools.registerTool('todo_list_tasks', async function (params) {
-  return listTasksHandler(db(), params)
-})
-window.utools.registerTool('todo_complete_task', withNotify(completeTaskHandler))
 window.utools.registerTool('todo_update_task', withNotify(updateTaskHandler))
 window.utools.registerTool('todo_delete_task', withNotify(deleteTaskHandler))
-
-// Subtasks
-window.utools.registerTool('todo_add_subtask', withNotify(addSubtaskHandler))
-window.utools.registerTool('todo_update_subtask', withNotify(updateSubtaskHandler))
-window.utools.registerTool('todo_delete_subtask', withNotify(deleteSubtaskHandler))
-
-// Search / overview / enumeration (read-only)
 window.utools.registerTool('todo_search_tasks', async function (params) {
   return searchTasksHandler(db(), params)
+})
+window.utools.registerTool('todo_get_task', async function (params) {
+  return getTaskHandler(db(), params)
 })
 window.utools.registerTool('todo_get_overview', async function (params) {
   return taskOverviewHandler(db(), params)
 })
-window.utools.registerTool('todo_list_tags', async function () {
-  return listTagsHandler(db())
-})
-window.utools.registerTool('todo_list_groups', async function () {
-  return listGroupsHandler(db())
-})
-
-// Single task detail + settings + markdown (read-only)
-window.utools.registerTool('todo_get_task', async function (params) {
-  return getTaskHandler(db(), params)
-})
-window.utools.registerTool('todo_get_settings', async function () {
-  return getSettingsHandler(db())
-})
-window.utools.registerTool('todo_render_markdown', async function (params) {
-  if (!markedRenderer) throw new Error('marked 渲染器未安装')
-  return renderMarkdownHandler(params, { render: markedRenderer })
-})
-
-// Export / import (file IO via fs + downloads dir)
-window.utools.registerTool('todo_export_tasks', withNotify(function (params) {
-  return exportTasksHandler(params, {
-    fs: fs,
-    path: path,
-    downloadsDir: window.utools.getPath('downloads'),
-    readTasks: readTasksFromDb,
-  })
-}))
-window.utools.registerTool('todo_import_tasks', withNotify(function (params) {
-  return importTasksHandler(params, {
-    fs: fs,
-    readTasks: readTasksFromDb,
-    saveTasks: writeTasksToDb,
-  })
-}))
-
-// Bulk update (write, capped at 100 ids)
 window.utools.registerTool('todo_bulk_update', withNotify(bulkUpdateHandler))
-
-// Notify (system notification, respects notifyEnabled setting)
-window.utools.registerTool('todo_notify', async function (params) {
-  return notifyHandler(params, {
-    showNotification: window.utools.showNotification.bind(window.utools),
-    settingsDb: db(),
-  })
+window.utools.registerTool('todo_get_review', async function () {
+  return getReviewHandler(db())
 })
-
-// Templates (independent storage in jianyue.templates)
+window.utools.registerTool('todo_suggest_organization', async function (params) {
+  return suggestOrganizationHandler(db(), params)
+})
 window.utools.registerTool('todo_create_template', withNotify(function (params) {
   return createTemplateHandler(db(), params)
 }))
 window.utools.registerTool('todo_list_templates', async function () {
   return listTemplatesHandler(db())
 })
+window.utools.registerTool('todo_update_template', withNotify(function (params) {
+  return updateTemplateHandler(db(), params)
+}))
 window.utools.registerTool('todo_delete_template', withNotify(function (params) {
   return deleteTemplateHandler(db(), params)
 }))
 window.utools.registerTool('todo_apply_template', withNotify(function (params) {
   return applyTemplateHandler(db(), params)
 }))
-
-// Reminder management (write tools, refresh views)
-window.utools.registerTool('todo_set_reminder', withNotify(setReminderHandler))
 window.utools.registerTool('todo_snooze_reminder', withNotify(snoozeReminderHandler))
-window.utools.registerTool('todo_dismiss_reminder', withNotify(dismissReminderHandler))
-
-// Due reminders query (read-only)
+window.utools.registerTool('todo_acknowledge_reminder', withNotify(acknowledgeReminderHandler))
 window.utools.registerTool('todo_list_due_reminders', async function (params) {
   return listDueRemindersHandler(db(), params)
 })

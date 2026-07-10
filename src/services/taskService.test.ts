@@ -417,6 +417,30 @@ describe('taskService', () => {
 	});
 
 	describe('bulkUpdate', () => {
+		it('spawns the next instance when completing a repeating task', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(10_000);
+			const repeating = createTaskFixture({
+				id: 'repeat-bulk',
+				status: 'todo',
+				dueStart: 1_000,
+				repeat: { type: 'daily', interval: 1 },
+			});
+			taskService.replaceAll([repeating]);
+
+			expect(taskService.bulkUpdate([repeating.id], { status: 'done' })).toBe(1);
+
+			const tasks = taskService.getAll();
+			expect(tasks).toHaveLength(2);
+			expect(tasks.find((task) => task.id === repeating.id)).toMatchObject({
+				status: 'done',
+				repeat: { generatedCount: 1 },
+			});
+			expect(tasks.find((task) => task.id !== repeating.id)).toMatchObject({
+				status: 'todo',
+				dueStart: 1_000 + 24 * 60 * 60 * 1_000,
+			});
+		});
+
 		it('updates only matched ids and refreshes updatedAt', () => {
 			vi.spyOn(Date, 'now').mockReturnValue(5000);
 			const a = createTaskFixture({ id: 'a', status: 'todo', priority: 'low', group: 'g1', updatedAt: 100 });

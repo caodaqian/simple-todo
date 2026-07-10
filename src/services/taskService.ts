@@ -769,13 +769,17 @@ class TaskService {
 		const tasks = this.getAll();
 		let count = 0;
 
-		for (let i = 0; i < tasks.length; i += 1) {
-			const task = tasks[i];
-			if (!task || !idSet.has(task.id)) {
+		const existingTasks = tasks.slice();
+		for (const task of existingTasks) {
+			const i = tasks.findIndex((candidate) => candidate.id === task.id);
+			if (i === -1) {
+				continue;
+			}
+			if (!idSet.has(task.id)) {
 				continue;
 			}
 
-			tasks[i] = {
+			const updated: Task = {
 				...task,
 				...(updates.status !== undefined ? { status: updates.status } : {}),
 				...(updates.priority !== undefined ? { priority: updates.priority } : {}),
@@ -784,6 +788,14 @@ class TaskService {
 				subtasks: cloneSubtasks(task.subtasks),
 				updatedAt: now,
 			};
+			tasks[i] = updated;
+			if (task.status !== 'done' && updated.status === 'done' && updated.repeat && shouldSpawnNext(updated)) {
+				const next = buildNextInstance(updated);
+				if (next.repeat !== undefined) {
+					tasks[i] = { ...updated, repeat: next.repeat };
+				}
+				tasks.push(next);
+			}
 			count += 1;
 		}
 

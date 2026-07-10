@@ -24,21 +24,6 @@ const isTimestamp = (value: unknown): value is number => {
 	return typeof value === 'number' && Number.isFinite(value);
 };
 
-const generateSubtaskId = (): string => {
-	const timestamp = Date.now().toString(36);
-	const random = Math.random().toString(36).slice(2, 10);
-	return `sub-${timestamp}-${random}`;
-};
-
-const cloneSubtasksWithNewIds = (subtasks: Subtask[] = [], now: number = Date.now()): Subtask[] =>
-	subtasks.map((s) => ({
-		id: generateSubtaskId(),
-		title: s.title,
-		completed: false,
-		createdAt: now,
-		updatedAt: now,
-	}));
-
 const cloneSubtasks = (subtasks: Subtask[] = []): Subtask[] =>
 	subtasks.map((s) => ({ ...s }));
 
@@ -51,7 +36,7 @@ const generateTemplateId = (): string => {
 const toTemplate = (value: unknown): TaskTemplate | null => {
 	if (!isObjectRecord(value)) return null;
 	const {
-		id, name, title, priority, tags, group, description, subtasks,
+		id, name, title, priority, tags, group, description, subtasks, children,
 		reminderOffset, repeat, createdAt, updatedAt,
 	} = value;
 	if (typeof id !== 'string' || id.length === 0) return null;
@@ -61,7 +46,7 @@ const toTemplate = (value: unknown): TaskTemplate | null => {
 	if (!Array.isArray(tags)) return null;
 	if (typeof group !== 'string') return null;
 	if (typeof description !== 'string') return null;
-	if (!Array.isArray(subtasks)) return null;
+	if (!Array.isArray(subtasks) && !Array.isArray(children)) return null;
 	if (!isTimestamp(createdAt) || !isTimestamp(updatedAt)) return null;
 	if (reminderOffset !== undefined && (typeof reminderOffset !== 'number' || !Number.isFinite(reminderOffset) || reminderOffset < 0)) {
 		return null;
@@ -74,7 +59,7 @@ const toTemplate = (value: unknown): TaskTemplate | null => {
 	}
 
 	const normalizedSubtasks: Subtask[] = [];
-	for (const subtask of subtasks) {
+	for (const subtask of Array.isArray(subtasks) ? subtasks : []) {
 		if (!isObjectRecord(subtask)) return null;
 		const {
 			id: subId, title: subTitle, completed, createdAt: subC, updatedAt: subU,
@@ -84,6 +69,15 @@ const toTemplate = (value: unknown): TaskTemplate | null => {
 		if (typeof completed !== 'boolean') return null;
 		if (!isTimestamp(subC) || !isTimestamp(subU)) return null;
 		normalizedSubtasks.push({ id: subId, title: subTitle, completed, createdAt: subC, updatedAt: subU });
+	}
+	const normalizedChildren: string[] = [];
+	if (Array.isArray(children)) {
+		for (const child of children) {
+			if (typeof child !== 'string' || !child.trim()) return null;
+			normalizedChildren.push(child.trim());
+		}
+	} else {
+		normalizedChildren.push(...normalizedSubtasks.map((subtask) => subtask.title));
 	}
 
 	// repeat 校验复用宽松规则
@@ -107,6 +101,7 @@ const toTemplate = (value: unknown): TaskTemplate | null => {
 		id, name, title, priority,
 		tags: normalizedTags, group, description,
 		subtasks: normalizedSubtasks,
+		children: normalizedChildren,
 		createdAt, updatedAt,
 		...(reminderOffset !== undefined ? { reminderOffset } : {}),
 		...(repeatRule !== undefined ? { repeat: repeatRule } : {}),
@@ -121,6 +116,7 @@ export interface CreateTemplateInput {
 	group?: string;
 	description?: string;
 	subtasks?: Subtask[];
+	children?: string[];
 	reminderOffset?: number;
 	repeat?: TaskTemplate['repeat'];
 }
@@ -180,6 +176,7 @@ class TemplateService {
 			group: input.group ?? '',
 			description: input.description ?? '',
 			subtasks: cloneSubtasks(input.subtasks),
+			children: input.children ? [...input.children] : (input.subtasks ?? []).map((subtask) => subtask.title),
 			createdAt: now,
 			updatedAt: now,
 			...(input.reminderOffset !== undefined ? { reminderOffset: input.reminderOffset } : {}),
@@ -207,6 +204,7 @@ class TemplateService {
 			group: patch.group ?? current.group,
 			description: patch.description ?? current.description,
 			subtasks: patch.subtasks ? cloneSubtasks(patch.subtasks) : cloneSubtasks(current.subtasks),
+			children: patch.children ? [...patch.children] : [...(current.children ?? current.subtasks.map((subtask) => subtask.title))],
 			updatedAt: now,
 			...(patch.reminderOffset !== undefined ? { reminderOffset: patch.reminderOffset } : {}),
 			...(patch.repeat !== undefined ? { repeat: patch.repeat } : {}),
@@ -242,12 +240,26 @@ class TemplateService {
 			tags: overrides.tags ? [...overrides.tags] : [...tpl.tags],
 			group: overrides.group ?? tpl.group,
 			description: tpl.description,
-			subtasks: cloneSubtasksWithNewIds(tpl.subtasks),
+			subtasks: [],
 			...(overrides.dueDate !== undefined ? { dueDate: overrides.dueDate } : {}),
 			...(tpl.reminderOffset !== undefined ? { reminderOffset: tpl.reminderOffset } : {}),
 			...(tpl.repeat !== undefined ? { repeat: tpl.repeat } : {}),
 		};
-		return taskService.create(input);
+		const task = taskService.create(input);
+		const children = tpl.children ?? tpl.subtasks.map((subtask) => subtask.title);
+		for (const title of children) {
+			taskService.create({
+				title,
+				status: 'todo',
+				priority: task.priority,
+				tags: [...task.tags],
+				group: task.group,
+				description: '',
+				subtasks: [],
+				parentTaskId: task.id,
+			});
+		}
+		return task;
 	}
 }
 

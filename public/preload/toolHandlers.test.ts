@@ -197,13 +197,14 @@ describe('toolHandlers – pure logic', () => {
 			expect(stored[0]!.title).toBe('买牛奶');
 			expect(stored[0]!.priority).toBe('high');
 			expect(stored[0]!.tags).toEqual(['生活']);
-			expect(stored[0]!.dueDate).toBe(new Date('2026-06-10T18:00:00+08:00').getTime());
+			expect(stored[0]!.dueStart).toBe(new Date('2026-06-10T18:00:00+08:00').getTime());
+			expect(stored[0]).not.toHaveProperty('dueDate');
 		});
 
-		it('omits dueDate when not provided', () => {
+		it('omits dueStart when not provided', () => {
 			createTaskHandler(db, { title: '无截止' });
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
-			expect(stored[0]).not.toHaveProperty('dueDate');
+			expect(stored[0]).not.toHaveProperty('dueStart');
 		});
 
 		it('defaults priority to medium and tags to empty array', () => {
@@ -341,12 +342,13 @@ describe('toolHandlers – pure logic', () => {
 			expect(() => updateTaskHandler(db, { task_id: 'u-invalid', tags: ['ok', 1] })).toThrow('tags 必须为字符串数组');
 		});
 
-		it('parses due_date and sets dueDate', () => {
+		it('migrates due_date input into dueStart', () => {
 			seedTask(db, { id: 'u2', title: 't' });
 			updateTaskHandler(db, { task_id: 'u2', due_date: '2026-08-01T09:00:00+08:00' });
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
 			const t = stored.find(x => x.id === 'u2')!;
-			expect(t.dueDate).toBe(new Date('2026-08-01T09:00:00+08:00').getTime());
+			expect(t.dueStart).toBe(new Date('2026-08-01T09:00:00+08:00').getTime());
+			expect(t).not.toHaveProperty('dueDate');
 		});
 
 		it('removes dueDate when due_date is unparseable', () => {
@@ -375,7 +377,7 @@ describe('toolHandlers – pure logic', () => {
 			seedTask(db, { id: 'child', title: '子', parentTaskId: 'parent' });
 
 			expect(() => updateTaskHandler(db, { task_id: 'parent', parent_task_id: 'parent' })).toThrow('任务不能设置自己为父任务');
-			expect(() => updateTaskHandler(db, { task_id: 'parent', parent_task_id: 'child' })).toThrow('不能将直接子任务设置为父任务');
+			expect(() => updateTaskHandler(db, { task_id: 'parent', parent_task_id: 'child' })).toThrow('循环');
 			expect(() => updateTaskHandler(db, { task_id: 'child', parent_task_id: 'missing' })).toThrow('未找到父任务: missing');
 		});
 	});
@@ -649,8 +651,8 @@ describe('toolHandlers – pure logic', () => {
 			expect(r.total).toBe(3);
 			expect(r.byStatus).toEqual({ todo: 1, doing: 1, done: 1 });
 			expect(r.byPriority).toEqual({ low: 1, medium: 1, high: 1, urgent: 0 });
-			// o1.dueDate = now-100000 落在今日且逾期（未完成）
-			expect(r.overdue).toBe(1);
+			// 产品逾期口径为结束时间早于今日开始；同日已过时不算跨日逾期。
+			expect(r.overdue).toBe(0);
 			expect(r.dueToday).toBe(1);
 			expect(r.noDueDate).toBe(1);
 		});
@@ -665,7 +667,7 @@ describe('toolHandlers – pure logic', () => {
 			const now = Date.now();
 			seedTask(db, { id: 'done-late', title: '已完成但逾期', status: 'done', priority: 'low', dueDate: now - 100000 });
 			const r = taskOverviewHandler(db) as { overdue: number };
-			expect(r.overdue).toBe(1); // only o1 is overdue; done-late is done
+			expect(r.overdue).toBe(0);
 		});
 
 		it('returns zeros on empty store', () => {
@@ -830,7 +832,7 @@ describe('toolHandlers – pure logic', () => {
 			expect(() => getTaskHandler(db, { task_id: 'ghost' })).toThrow('未找到任务: ghost');
 		});
 
-		it('returns full detail including subtasks and timestamps', () => {
+		it('returns full detail with timestamps while omitting legacy nested subtasks', () => {
 			seedTask(db, {
 				id: 'full', title: '完整', status: 'doing', priority: 'high',
 				tags: ['t1'], group: 'G', description: '# 标题',
@@ -842,9 +844,7 @@ describe('toolHandlers – pure logic', () => {
 			expect(r.description).toBe('# 标题');
 			expect(r.group).toBe('G');
 			expect(r.tags).toEqual(['t1']);
-			const subs = r.subtasks as Array<Record<string, unknown>>;
-			expect(subs[0]!.title).toBe('子');
-			expect(subs[0]!.completed).toBe(true);
+			expect(r).not.toHaveProperty('subtasks');
 			expect(r.created_at).toBe(new Date(1000).toISOString());
 		});
 
@@ -1048,7 +1048,7 @@ describe('toolHandlers – pure logic', () => {
 			expect(stored).toHaveLength(2);
 			const next = stored.find(t => t.id !== 'rep1') as Record<string, unknown>;
 			expect(next.status).toBe('todo');
-			expect(next.dueDate).toBe(new Date('2026-07-01T09:00:00Z').getTime() + 24 * 3600 * 1000);
+			expect(next.dueStart).toBe(new Date('2026-07-01T09:00:00Z').getTime() + 24 * 3600 * 1000);
 			expect((next.repeat as Record<string, unknown>).generatedCount).toBe(1);
 		});
 
@@ -1242,7 +1242,7 @@ describe('toolHandlers – pure logic', () => {
 			expect(shouldSpawnNextPure({ ...base, repeat: { type: 'daily', interval: 1, repeatCount: 1, generatedCount: 1 } })).toBe(false);
 		});
 
-		it('buildNextInstancePure advances dueDate and increments generatedCount', () => {
+		it('buildNextInstancePure migrates legacy dueDate into dueStart and increments generatedCount', () => {
 			const task = {
 				id: 'p', title: 'T', status: 'done', priority: 'high',
 				tags: ['a'], group: 'G', description: 'd', subtasks: [],
@@ -1251,7 +1251,7 @@ describe('toolHandlers – pure logic', () => {
 			};
 			const next = buildNextInstancePure(task, 2000) as Record<string, unknown>;
 			expect(next.status).toBe('todo');
-			expect(next.dueDate).toBe(1000 + 7 * 86400 * 1000);
+			expect(next.dueStart).toBe(1000 + 7 * 86400 * 1000);
 			expect((next.repeat as Record<string, unknown>).generatedCount).toBe(1);
 			expect(next.id).not.toBe('p');
 		});
@@ -1273,5 +1273,136 @@ describe('toolHandlers – storage key consistency', () => {
 		expect(STORAGE_KEY).toBe(STORAGE_KEYS.TASKS);
 		expect(SETTINGS_STORAGE_KEY).toBe(STORAGE_KEYS.SETTINGS);
 		expect(TEMPLATES_STORAGE_KEY).toBe(STORAGE_KEYS.TEMPLATES);
+	});
+});
+
+describe('unified MCP task contract', () => {
+	const handlers = toolHandlers as unknown as {
+		createTaskHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		updateTaskHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		searchTasksHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		bulkUpdateHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		getTaskHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		taskOverviewHandler: (db: DbStorage, params?: Record<string, unknown>) => unknown;
+		listDueRemindersHandler: (db: DbStorage, params?: Record<string, unknown>) => unknown;
+		acknowledgeReminderHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		createTemplateHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		updateTemplateHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		applyTemplateHandler: (db: DbStorage, params: Record<string, unknown>) => unknown;
+		getReviewHandler: (db: DbStorage) => unknown;
+		suggestOrganizationHandler: (db: DbStorage, params?: Record<string, unknown>) => unknown;
+	};
+	let db: ReturnType<typeof createDb>;
+
+	beforeEach(() => {
+		db = createDb();
+	});
+
+	it('creates an all-day time-range task with only unified date fields', () => {
+		handlers.createTaskHandler(db, {
+			title: '团建',
+			due_start: '2026-08-08',
+			due_end: '2026-08-10',
+			all_day: true,
+		});
+
+		const task = (db.snapshot() as Array<Record<string, unknown>>)[0]!;
+		expect(task.dueStart).toBe(new Date(2026, 7, 8).getTime());
+		expect(task.dueEnd).toBe(new Date(2026, 7, 10).getTime());
+		expect(task.allDay).toBe(true);
+		expect(task).not.toHaveProperty('dueDate');
+	});
+
+	it('rejects a parent cycle through any ancestor', () => {
+		seedTask(db, { id: 'a', title: 'A' });
+		seedTask(db, { id: 'b', title: 'B', parentTaskId: 'a' });
+		seedTask(db, { id: 'c', title: 'C', parentTaskId: 'b' });
+
+		expect(() => handlers.updateTaskHandler(db, { task_id: 'a', parent_task_id: 'c' })).toThrow('循环');
+	});
+
+	it('searches time ranges by interval overlap and supports hierarchy and archive filters', () => {
+		seedTask(db, {
+			id: 'parent', title: '父任务', dueStart: new Date('2026-07-10T09:00:00Z').getTime(),
+			dueEnd: new Date('2026-07-10T11:00:00Z').getTime(),
+		});
+		seedTask(db, { id: 'child', title: '子任务', parentTaskId: 'parent' });
+		seedTask(db, { id: 'archived', title: '归档', archivedAt: Date.now() });
+
+		const overlap = handlers.searchTasksHandler(db, {
+			due_after: '2026-07-10T10:30:00Z', due_before: '2026-07-10T12:00:00Z',
+		}) as { tasks: Array<Record<string, unknown>> };
+		expect(overlap.tasks.map((task) => task.id)).toEqual(['parent']);
+		expect((handlers.searchTasksHandler(db, { parent_task_id: 'parent' }) as { tasks: Array<Record<string, unknown>> }).tasks.map((task) => task.id)).toEqual(['child']);
+		expect((handlers.searchTasksHandler(db, { root_only: true }) as { tasks: Array<Record<string, unknown>> }).tasks.map((task) => task.id)).toEqual(['parent']);
+		expect((handlers.searchTasksHandler(db, { archived: true }) as { tasks: Array<Record<string, unknown>> }).tasks.map((task) => task.id)).toEqual(['archived']);
+	});
+
+	it('uses dueEnd for overdue overview and dueStart for reminders', () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-10T12:00:00Z'));
+		seedTask(db, {
+			id: 'active-range', title: '进行中的时间段', status: 'todo',
+			dueStart: new Date('2026-07-10T09:00:00Z').getTime(),
+			dueEnd: new Date('2026-07-10T13:00:00Z').getTime(), reminderOffset: 0,
+		});
+
+		const overview = handlers.taskOverviewHandler(db) as { overdue: number; dueToday: number };
+		expect(overview).toMatchObject({ overdue: 0, dueToday: 1 });
+		expect((handlers.listDueRemindersHandler(db) as { reminders: Array<Record<string, unknown>> }).reminders.map((task) => task.id)).toEqual(['active-range']);
+		vi.useRealTimers();
+	});
+
+	it('updates completion consistently and clears nullable fields', () => {
+		seedTask(db, {
+			id: 'repeating', title: '每日站会', status: 'todo', dueStart: 1_000,
+			reminderOffset: 10, repeat: { type: 'daily', interval: 1 },
+		});
+		handlers.updateTaskHandler(db, { task_id: 'repeating', status: 'done', reminder_offset: null });
+		handlers.updateTaskHandler(db, { task_id: 'repeating', repeat: null });
+
+		const tasks = db.snapshot() as Array<Record<string, unknown>>;
+		expect(tasks).toHaveLength(2);
+		expect(tasks.find((task) => task.id === 'repeating')).not.toHaveProperty('reminderOffset');
+		expect(tasks.find((task) => task.id === 'repeating')).not.toHaveProperty('repeat');
+		expect(tasks.find((task) => task.id !== 'repeating')!.dueStart).toBe(1_000 + 86_400_000);
+	});
+
+	it('bulk completion validates values and spawns repeat instances', () => {
+		seedTask(db, { id: 'repeat-bulk', title: '周报', dueStart: 1_000, repeat: { type: 'weekly', interval: 1 } });
+		expect(() => handlers.bulkUpdateHandler(db, { task_ids: ['repeat-bulk'], priority: 'invalid' })).toThrow('任务优先级无效');
+		handlers.bulkUpdateHandler(db, { task_ids: ['repeat-bulk'], status: 'done', archived: true });
+		const tasks = db.snapshot() as Array<Record<string, unknown>>;
+		expect(tasks).toHaveLength(2);
+		expect(tasks.find((task) => task.id === 'repeat-bulk')).toHaveProperty('archivedAt');
+		expect(tasks.find((task) => task.id !== 'repeat-bulk')!.status).toBe('todo');
+	});
+
+	it('acknowledges a reminder without removing its configuration', () => {
+		seedTask(db, { id: 'reminder', title: '缴费', dueStart: 1_000, reminderOffset: 30, snoozedUntil: 2_000 });
+		handlers.acknowledgeReminderHandler(db, { task_id: 'reminder' });
+		const task = (db.snapshot() as Array<Record<string, unknown>>)[0]!;
+		expect(task.remindedAt).toEqual(expect.any(Number));
+		expect(task.reminderOffset).toBe(30);
+		expect(task.snoozedUntil).toBe(2_000);
+	});
+
+	it('updates templates and applies their children as flat tasks', () => {
+		const created = handlers.createTemplateHandler(db, { name: '发布', title: '发布版本', children: ['检查', '通知'] }) as { template_id: string };
+		handlers.updateTemplateHandler(db, { template_id: created.template_id, group: '工作', repeat: null });
+		const applied = handlers.applyTemplateHandler(db, { template_id: created.template_id, due_start: '2026-08-01T10:00:00Z' }) as { task_id: string };
+		const tasks = db.snapshot() as Array<Record<string, unknown>>;
+		expect(tasks).toHaveLength(3);
+		expect(tasks.filter((task) => task.parentTaskId === applied.task_id).map((task) => task.title)).toEqual(['检查', '通知']);
+	});
+
+	it('returns review metrics and non-mutating organization suggestions', () => {
+		seedTask(db, { id: 'suggest', title: '明天完成项目评审', priority: 'medium', tags: [], group: '' });
+		db.setItem('jianyue.pomodoro.history', JSON.stringify([{ id: 'p1', status: 'finished', durationMinutes: 25 }]));
+		const review = handlers.getReviewHandler(db) as { total: number; focus_minutes: number };
+		expect(review).toMatchObject({ total: 1, focus_minutes: 25 });
+		const plan = handlers.suggestOrganizationHandler(db) as { changes: Array<{ task_id: string; reasons: string[] }> };
+		expect(plan.changes).toEqual(expect.arrayContaining([expect.objectContaining({ task_id: 'suggest' })]));
+		expect((db.snapshot() as Array<Record<string, unknown>>)[0]!.group).toBe('');
 	});
 });
