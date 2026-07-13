@@ -3,12 +3,12 @@
 import { renderMarkdown } from '../services/markdownService';
 import { notify } from '../services/notifyService';
 import { taskService } from '../services/taskService';
-  import { taskWorkflowService } from '../services/taskWorkflowService';
-  import { templateService, type CreateTemplateInput } from '../services/templateService';
-  import type { RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
+import { taskWorkflowService } from '../services/taskWorkflowService';
+import { templateService, type CreateTemplateInput } from '../services/templateService';
+import type { RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
 import { getTaskEnd, getTaskStart } from '../types/task';
 import AppIcon from './AppIcon.vue';
-  import PomodoroStartButton from './PomodoroStartButton.vue';
+import PomodoroStartButton from './PomodoroStartButton.vue';
 
   type RepeatFormType = '' | RepeatRule['type'];
 
@@ -839,6 +839,11 @@ import AppIcon from './AppIcon.vue';
     form.value.endDate = '';
     form.value.endTime = '10:00';
   };
+
+  const addDue = (): void => {
+    form.value.hasDue = true;
+    form.value.allDay = true;
+  };
 </script>
 
 <template>
@@ -1021,7 +1026,7 @@ id="task-tag-input"
                 v-if="!form.hasDue"
                 type="button"
                 class="due-add-btn"
-                @click="form.hasDue = true"
+                @click="addDue"
               >
                 <AppIcon name="plus" :size="14" />
                 <span>添加截止时间</span>

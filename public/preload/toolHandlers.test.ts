@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // toolHandlers.js is a CommonJS module (preload folder has type:commonjs).
 // Default import gives us its module.exports via vitest's CJS interop.
@@ -209,6 +211,22 @@ describe('toolHandlers – pure logic', () => {
 			expect(stored[0]).not.toHaveProperty('dueStart');
 		});
 
+		it('treats null optional schedule fields as omitted', () => {
+			createTaskHandler(db, {
+				title: '无时间任务',
+				due_start: null,
+				due_end: null,
+				all_day: null,
+				repeat: null,
+			} as Record<string, unknown>);
+
+			const stored = db.snapshot() as Array<Record<string, unknown>>;
+			expect(stored[0]).not.toHaveProperty('dueStart');
+			expect(stored[0]).not.toHaveProperty('dueEnd');
+			expect(stored[0]).not.toHaveProperty('allDay');
+			expect(stored[0]).not.toHaveProperty('repeat');
+		});
+
 		it('defaults priority to medium and tags to empty array', () => {
 			createTaskHandler(db, { title: '默认值' });
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
@@ -354,6 +372,38 @@ describe('toolHandlers – pure logic', () => {
 			expect(t.status).toBe('todo');
 			expect(t.tags).toEqual(['a']);
 			expect(t.description).toBe('原描述');
+		});
+
+		it('ignores null for optional fields without a clear semantic', () => {
+			seedTask(db, {
+				id: 'u-null',
+				title: '原标题',
+				status: 'doing',
+				priority: 'high',
+				tags: ['工作'],
+				group: '项目 A',
+				description: '原描述',
+			});
+
+			updateTaskHandler(db, {
+				task_id: 'u-null',
+				title: null,
+				status: null,
+				priority: null,
+				tags: null,
+				group: null,
+				description: null,
+			} as Record<string, unknown>);
+
+			const task = (db.snapshot() as Array<Record<string, unknown>>).find((item) => item.id === 'u-null')!;
+			expect(task).toMatchObject({
+				title: '原标题',
+				status: 'doing',
+				priority: 'high',
+				tags: ['工作'],
+				group: '项目 A',
+				description: '原描述',
+			});
 		});
 
 		it('clears completion time when a completed task is reopened', () => {
@@ -652,6 +702,22 @@ describe('toolHandlers – pure logic', () => {
 			const r = searchTasksHandler(db, { keyword: 'review' }) as { tasks: Array<Record<string, unknown>> };
 			expect(r.tasks[0]!.group).toBe('A');
 			expect(r.tasks[0]!.description).toBe('desc here');
+		});
+
+		it('includes direct child task summaries with IDs on parent results', () => {
+			seedTask(db, { id: 'parent', title: '父任务' });
+			seedTask(db, { id: 'child', title: '子任务', status: 'doing', priority: 'high', parentTaskId: 'parent' });
+
+			const result = searchTasksHandler(db, { keyword: '父任务' }) as {
+				tasks: Array<{ id: string; subtasks: Array<Record<string, unknown>> }>;
+			};
+
+			expect(result.tasks).toEqual([
+				expect.objectContaining({
+					id: 'parent',
+					subtasks: [expect.objectContaining({ id: 'child', title: '子任务', status: 'doing', priority: 'high' })],
+				}),
+			]);
 		});
 	});
 
@@ -1153,6 +1219,22 @@ describe('toolHandlers – pure logic', () => {
 			expect(task.reminderOffset).toBe(15);
 		});
 
+		it('treats null optional template schedule overrides as omitted', () => {
+			const created = createTemplateHandler(db, { name: '无时间模板', title: '模板任务' }) as { template_id: string };
+
+			applyTemplateHandler(db, {
+				template_id: created.template_id,
+				due_start: null,
+				due_end: null,
+				all_day: null,
+			} as Record<string, unknown>);
+
+			const task = (db.snapshot() as Array<Record<string, unknown>>)[0]!;
+			expect(task).not.toHaveProperty('dueStart');
+			expect(task).not.toHaveProperty('dueEnd');
+			expect(task).not.toHaveProperty('allDay');
+		});
+
 		it('applyTemplate throws on missing template', () => {
 			expect(() => applyTemplateHandler(db, { template_id: 'ghost' })).toThrow('未找到模板: ghost');
 		});
@@ -1284,6 +1366,29 @@ describe('toolHandlers – pure logic', () => {
 			expect((next.repeat as Record<string, unknown>).generatedCount).toBe(1);
 			expect(next.id).not.toBe('p');
 		});
+	});
+});
+
+describe('MCP schema contract', () => {
+	const plugin = JSON.parse(readFileSync(resolve(process.cwd(), 'public/plugin.json'), 'utf8')) as {
+		tools: Record<string, { description: string; inputSchema: { properties: Record<string, { type?: string | string[]; description?: string }> } }>;
+	};
+
+	it('documents the null-as-omitted rule on every registered tool', () => {
+		for (const tool of Object.values(plugin.tools)) {
+			expect(tool.description).toContain('null');
+		}
+	});
+
+	it('accepts null for optional schedule and repeat fields on create tools', () => {
+		for (const toolName of ['todo_create_task', 'todo_apply_template']) {
+			const properties = plugin.tools[toolName]!.inputSchema.properties;
+			expect(properties.due_start!.type).toContain('null');
+			expect(properties.due_end!.type).toContain('null');
+			expect(properties.all_day!.type).toContain('null');
+		}
+		expect(plugin.tools.todo_create_task!.inputSchema.properties.repeat!.type).toContain('null');
+		expect(plugin.tools.todo_create_template!.inputSchema.properties.repeat!.type).toContain('null');
 	});
 });
 

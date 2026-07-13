@@ -47,6 +47,16 @@ function hasOwn(value, key) {
 	return !!value && Object.prototype.hasOwnProperty.call(value, key);
 }
 
+function omitOptionalNulls(params, fieldNames) {
+	const normalized = params && typeof params === 'object' && !Array.isArray(params)
+		? Object.assign({}, params)
+		: {};
+	fieldNames.forEach(function (fieldName) {
+		if (normalized[fieldName] === null) delete normalized[fieldName];
+	});
+	return normalized;
+}
+
 function isTaskPriority(value) {
 	return value === 'low' || value === 'medium' || value === 'high' || value === 'urgent';
 }
@@ -90,7 +100,7 @@ function getTaskEnd(task) {
 	return task.dueEnd !== undefined ? task.dueEnd : getTaskStart(task);
 }
 
-function toTaskListOutput(t) {
+function toTaskListOutput(t, subtasks) {
 	return {
 		id: t.id,
 		title: t.title,
@@ -104,6 +114,7 @@ function toTaskListOutput(t) {
 		group: t.group || '',
 		description: t.description || '',
 		parent_task_id: t.parentTaskId,
+		subtasks: subtasks || [],
 		archived: t.archivedAt !== undefined,
 	};
 }
@@ -181,6 +192,10 @@ function applyTaskSchedule(task, params) {
 }
 
 function createTaskHandler(dbStorage, params) {
+	params = omitOptionalNulls(params, [
+		'priority', 'parent_task_id', 'due_start', 'due_end', 'due_date', 'all_day',
+		'tags', 'group', 'description', 'reminder_offset', 'repeat',
+	]);
 	const title = params && params.title;
 	if (!title || typeof title !== 'string' || !title.trim()) {
 		throw new Error('任务标题不能为空');
@@ -290,6 +305,7 @@ function completeTaskHandler(dbStorage, params) {
 }
 
 function updateTaskHandler(dbStorage, params) {
+	params = omitOptionalNulls(params, ['title', 'status', 'priority', 'tags', 'group', 'description', 'due_date']);
 	const taskId = params && params.task_id;
 	if (!taskId) {
 		throw new Error('task_id 不能为空');
@@ -514,8 +530,13 @@ function asArray(value) {
 }
 
 function searchTasksHandler(dbStorage, params) {
-	const p = params || {};
-	let tasks = readTasksFromDb(dbStorage);
+	const p = omitOptionalNulls(params, [
+		'keyword', 'status', 'priority', 'tags', 'tag_match_mode', 'group', 'parent_task_id',
+		'root_only', 'archived', 'due_after', 'due_before', 'include_no_due', 'show_completed',
+		'sort_by', 'sort_order', 'limit', 'offset',
+	]);
+	const allTasks = readTasksFromDb(dbStorage);
+	let tasks = allTasks;
 	if (p.archived === true) tasks = tasks.filter(function (t) { return t.archivedAt !== undefined; });
 	else tasks = tasks.filter(function (t) { return t.archivedAt === undefined; });
 	if (typeof p.parent_task_id === 'string') tasks = tasks.filter(function (t) { return t.parentTaskId === p.parent_task_id; });
@@ -591,7 +612,18 @@ function searchTasksHandler(dbStorage, params) {
 	const offset = typeof p.offset === 'number' && p.offset >= 0 ? p.offset : 0;
 	const sliced = tasks.slice(offset, offset + limit);
 
-	const result = sliced.map(toTaskListOutput);
+	const childTasksByParentId = {};
+	allTasks.forEach(function (task) {
+		if (task.archivedAt === undefined && p.archived === true) return;
+		if (task.archivedAt !== undefined && p.archived !== true) return;
+		if (!task.parentTaskId) return;
+		if (!childTasksByParentId[task.parentTaskId]) childTasksByParentId[task.parentTaskId] = [];
+		childTasksByParentId[task.parentTaskId].push(toChildOutput(task));
+	});
+
+	const result = sliced.map(function (task) {
+		return toTaskListOutput(task, childTasksByParentId[task.id] || []);
+	});
 
 	return { tasks: result, total: total, limit: limit, offset: offset };
 }
@@ -605,7 +637,7 @@ function startOfToday(now) {
 }
 
 function taskOverviewHandler(dbStorage, params) {
-	const p = params || {};
+	const p = omitOptionalNulls(params, ['group']);
 	let tasks = readTasksFromDb(dbStorage).filter(function (task) { return task.archivedAt === undefined; });
 	if (p.group) {
 		tasks = tasks.filter(function (t) { return t.group === p.group });
@@ -817,7 +849,7 @@ function renderMarkdownHandler(params, deps) {
 const BULK_UPDATE_MAX = 100;
 
 function bulkUpdateHandler(dbStorage, params) {
-	const p = params || {};
+	const p = omitOptionalNulls(params, ['status', 'priority', 'group', 'archived']);
 	const ids = Array.isArray(p.task_ids) ? p.task_ids : [];
 	if (ids.length === 0) throw new Error('task_ids 不能为空');
 	if (ids.length > BULK_UPDATE_MAX) {
@@ -1042,6 +1074,9 @@ function toTemplateOutput(tpl) {
 }
 
 function createTemplateHandler(dbStorage, params) {
+	params = omitOptionalNulls(params, [
+		'priority', 'tags', 'group', 'description', 'children', 'reminder_offset', 'repeat',
+	]);
 	const name = params && typeof params.name === 'string' ? params.name.trim() : '';
 	if (!name) throw new Error('模板名称不能为空');
 	const title = params && typeof params.title === 'string' ? params.title.trim() : '';
@@ -1076,6 +1111,7 @@ function listTemplatesHandler(dbStorage) {
 }
 
 function updateTemplateHandler(dbStorage, params) {
+	params = omitOptionalNulls(params, ['name', 'title', 'priority', 'tags', 'group', 'description', 'children']);
 	const id = params && params.template_id;
 	if (!id) throw new Error('template_id 不能为空');
 	const templates = readTemplatesFromDb(dbStorage);
@@ -1132,6 +1168,7 @@ function deleteTemplateHandler(dbStorage, params) {
 }
 
 function applyTemplateHandler(dbStorage, params) {
+	params = omitOptionalNulls(params, ['title', 'tags', 'group', 'due_start', 'due_end', 'due_date', 'all_day']);
 	const id = params && params.template_id;
 	if (!id) throw new Error('template_id 不能为空');
 	const list = readTemplatesFromDb(dbStorage);
@@ -1264,7 +1301,7 @@ function computeReminderAtPure(task) {
 }
 
 function listDueRemindersHandler(dbStorage, params) {
-	const p = params || {};
+	const p = omitOptionalNulls(params, ['include_overdue', 'limit']);
 	const now = Date.now();
 	const includeOverdue = p.include_overdue !== false;
 	let tasks = readTasksFromDb(dbStorage);

@@ -30,8 +30,31 @@ const {
 } = require('./toolHandlers')
 
 // ── dbStorage accessor ────────────────────────────────────────────────
+let pendingTasksPayload = null
+
 function db() {
-  return window.utools.dbStorage
+  const storage = window.utools.dbStorage
+  return {
+    getItem(key) {
+      if (key === STORAGE_KEY && pendingTasksPayload !== null) {
+        const persisted = storage.getItem(key)
+        if (persisted === pendingTasksPayload) {
+          pendingTasksPayload = null
+          return persisted
+        }
+        return pendingTasksPayload
+      }
+      return storage.getItem(key)
+    },
+    setItem(key, value) {
+      storage.setItem(key, value)
+      if (key === STORAGE_KEY) {
+        // uTools 的 dbStorage 偶尔会在 setItem 后短暂返回旧值。立即回读；
+        // 未持久化前让后续 MCP 写操作读取本次写入的快照。
+        pendingTasksPayload = storage.getItem(key) === value ? null : value
+      }
+    },
+  }
 }
 
 function readTasksFromDb() {
