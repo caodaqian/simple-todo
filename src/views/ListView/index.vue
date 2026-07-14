@@ -1,16 +1,19 @@
 <script setup lang="ts">
   import { computed, ref } from 'vue';
-  import AppIcon from '../../components/AppIcon.vue';
-  import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
-  import SmartTaskInput from '../../components/SmartTaskInput.vue';
-  import TaskCard from '../../components/TaskCard.vue';
-  import TaskEditor from '../../components/TaskEditor.vue';
-  import ViewToolbar from '../../components/ViewToolbar.vue';
-  import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
-  import { searchAndSortTasks } from '../../services/searchService';
-  import { taskService } from '../../services/taskService';
-  import { taskWorkflowService } from '../../services/taskWorkflowService';
-  import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField, TaskSortOption, TaskStatus } from '../../types/task';
+import AppIcon from '../../components/AppIcon.vue';
+import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
+import SmartTaskInput from '../../components/SmartTaskInput.vue';
+import TaskCard from '../../components/TaskCard.vue';
+import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedModal.vue';
+import TaskEditor from '../../components/TaskEditor.vue';
+import ViewToolbar from '../../components/ViewToolbar.vue';
+import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
+import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
+import { buildCompletedListRows } from '../../services/listViewProjection';
+import { searchAndSortTasks } from '../../services/searchService';
+import { taskService } from '../../services/taskService';
+import { taskWorkflowService } from '../../services/taskWorkflowService';
+import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField, TaskSortOption, TaskStatus } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
@@ -62,15 +65,32 @@
     props.sort ?? { field: 'updatedAt', order: defaultSortOrder.updatedAt },
   );
 
-  const visibleTasks = computed(() =>
-    taskService.getTasksInParentOrder(
-      searchAndSortTasks(
-        props.tasks,
-        { ...props.filter },
-        effectiveSort.value,
-      ),
+  const sortedVisibleTasks = computed(() =>
+    searchAndSortTasks(
+      props.tasks,
+      { ...props.filter },
+      effectiveSort.value,
     ),
   );
+
+  const isCompletedOnly = computed(() => {
+    const status = props.filter?.status;
+    return status === 'done' || (Array.isArray(status) && status.length === 1 && status[0] === 'done');
+  });
+
+  const visibleTasks = computed(() =>
+    taskService.getTasksInParentOrder(sortedVisibleTasks.value),
+  );
+
+  const completedRows = computed(() =>
+    buildCompletedListRows(props.tasks, sortedVisibleTasks.value),
+  );
+
+  const statusLabels: Record<TaskStatus, string> = {
+    todo: '待办',
+    doing: '进行中',
+    done: '已完成',
+  };
 
   const { getTaskDepth, getParentTitle } = useTaskHierarchy(() => props.tasks);
 
@@ -169,13 +189,21 @@
     finalizeBatch();
   };
 
+  const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
+
   const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    taskWorkflowService.changeStatus(taskId, status);
+    guardedChangeStatus(taskId, status);
     emit('refresh');
   };
 
   const handleToggleStatusClick = (task: Task): void => {
     handleStatusChange(task.id, task.status === 'done' ? 'todo' : task.status === 'todo' ? 'doing' : 'done');
+  };
+
+  const handleViewBlockedChildren = (): void => {
+    const parent = blockedInfo.value?.parent;
+    dismissBlockedModal();
+    if (parent) handleOpenEdit(parent);
   };
 
   const onToggleSelect = (task: Task): void => {
@@ -276,29 +304,87 @@
 
     <!-- Task list -->
     <div v-else class="task-list">
-      <TaskCard v-for="task in visibleTasks" :key="task.id" :task="task" variant="row" :selectable="batchMode"
-        :selected="isSelected(task.id)" :depth="getTaskDepth(task)" :parent-title="getParentTitle(task)"
-        @click="handleOpenEdit" @toggle-status="handleToggleStatusClick"
-        @toggle-select="onToggleSelect">
-        <template #actions="{ task: t }">
-          <PomodoroStartButton v-if="!batchMode" :task="t" />
-          <button v-if="!batchMode && t.archivedAt" type="button" class="btn-icon task-card__archive" title="恢复归档"
-            @click.stop="handleUnarchive(t.id)">
-            <AppIcon name="archiveRestore" :size="14" />
-          </button>
-          <button v-else-if="!batchMode" type="button" class="btn-icon task-card__archive" title="归档"
-            @click.stop="handleArchive(t.id)">
-            <AppIcon name="archive" :size="14" />
-          </button>
-          <button v-if="!batchMode" type="button" class="btn-icon btn-danger task-card__delete" title="删除"
-            @click.stop="handleDelete(t.id)">
-            <AppIcon name="trash2" :size="14" />
-          </button>
+      <template v-if="isCompletedOnly">
+        <template v-for="row in completedRows" :key="row.kind === 'parent-context' ? `parent-${row.parent.id}` : row.item.task.id">
+          <section v-if="row.kind === 'parent-context'" class="completed-parent-group">
+            <header class="completed-parent-group__header">
+              <span class="completed-parent-group__icon" aria-hidden="true">
+                <AppIcon name="listTree" :size="15" />
+              </span>
+              <span class="completed-parent-group__status">{{ statusLabels[row.parent.status] }}</span>
+              <span class="completed-parent-group__title">{{ row.parent.title }}</span>
+              <span class="completed-parent-group__count">已完成 {{ row.children.length }} 项子任务</span>
+            </header>
+            <div class="completed-parent-group__children">
+              <TaskCard v-for="item in row.children" :key="item.task.id" :task="item.task" variant="row"
+                :selectable="batchMode" :selected="isSelected(item.task.id)" :depth="item.depth"
+                :parent-title="item.parentTitle" @click="handleOpenEdit" @toggle-status="handleToggleStatusClick"
+                @toggle-select="onToggleSelect">
+                <template #actions="{ task: t }">
+                  <PomodoroStartButton v-if="!batchMode" :task="t" />
+                  <button v-if="!batchMode && t.archivedAt" type="button" class="btn-icon task-card__archive" title="恢复归档"
+                    @click.stop="handleUnarchive(t.id)">
+                    <AppIcon name="archiveRestore" :size="14" />
+                  </button>
+                  <button v-else-if="!batchMode" type="button" class="btn-icon task-card__archive" title="归档"
+                    @click.stop="handleArchive(t.id)">
+                    <AppIcon name="archive" :size="14" />
+                  </button>
+                  <button v-if="!batchMode" type="button" class="btn-icon btn-danger task-card__delete" title="删除"
+                    @click.stop="handleDelete(t.id)">
+                    <AppIcon name="trash2" :size="14" />
+                  </button>
+                </template>
+              </TaskCard>
+            </div>
+          </section>
+          <TaskCard v-else :task="row.item.task" variant="row" :selectable="batchMode"
+            :selected="isSelected(row.item.task.id)" :depth="row.item.depth" :parent-title="row.item.parentTitle"
+            @click="handleOpenEdit" @toggle-status="handleToggleStatusClick" @toggle-select="onToggleSelect">
+            <template #actions="{ task: t }">
+              <PomodoroStartButton v-if="!batchMode" :task="t" />
+              <button v-if="!batchMode && t.archivedAt" type="button" class="btn-icon task-card__archive" title="恢复归档"
+                @click.stop="handleUnarchive(t.id)">
+                <AppIcon name="archiveRestore" :size="14" />
+              </button>
+              <button v-else-if="!batchMode" type="button" class="btn-icon task-card__archive" title="归档"
+                @click.stop="handleArchive(t.id)">
+                <AppIcon name="archive" :size="14" />
+              </button>
+              <button v-if="!batchMode" type="button" class="btn-icon btn-danger task-card__delete" title="删除"
+                @click.stop="handleDelete(t.id)">
+                <AppIcon name="trash2" :size="14" />
+              </button>
+            </template>
+          </TaskCard>
         </template>
-      </TaskCard>
+      </template>
+      <template v-else>
+        <TaskCard v-for="task in visibleTasks" :key="task.id" :task="task" variant="row" :selectable="batchMode"
+          :selected="isSelected(task.id)" :depth="getTaskDepth(task)" :parent-title="getParentTitle(task)"
+          @click="handleOpenEdit" @toggle-status="handleToggleStatusClick" @toggle-select="onToggleSelect">
+          <template #actions="{ task: t }">
+            <PomodoroStartButton v-if="!batchMode" :task="t" />
+            <button v-if="!batchMode && t.archivedAt" type="button" class="btn-icon task-card__archive" title="恢复归档"
+              @click.stop="handleUnarchive(t.id)">
+              <AppIcon name="archiveRestore" :size="14" />
+            </button>
+            <button v-else-if="!batchMode" type="button" class="btn-icon task-card__archive" title="归档"
+              @click.stop="handleArchive(t.id)">
+              <AppIcon name="archive" :size="14" />
+            </button>
+            <button v-if="!batchMode" type="button" class="btn-icon btn-danger task-card__delete" title="删除"
+              @click.stop="handleDelete(t.id)">
+              <AppIcon name="trash2" :size="14" />
+            </button>
+          </template>
+        </TaskCard>
+      </template>
     </div>
 
     <TaskEditor v-model="editorVisible" :task="editingTask" @saved="handleSaved" @open-task="handleOpenEdit" />
+    <TaskCompletionBlockedModal v-if="blockedInfo" :info="blockedInfo" @cancel="dismissBlockedModal"
+      @view-children="handleViewBlockedChildren" />
   </section>
 </template>
 
@@ -370,6 +456,64 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+  }
+
+  .completed-parent-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-2) 0 0;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .completed-parent-group:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .completed-parent-group__header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 28px;
+    padding: 0 var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  .completed-parent-group__icon {
+    display: inline-flex;
+    color: var(--color-accent);
+    opacity: 0.7;
+  }
+
+  .completed-parent-group__status {
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-full);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  .completed-parent-group__title {
+    overflow: hidden;
+    color: var(--color-text-secondary);
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .completed-parent-group__count {
+    margin-left: auto;
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  .completed-parent-group__children {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
 
   /* Slotted delete button: hidden by default, revealed on TaskCard hover.

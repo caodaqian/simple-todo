@@ -1,16 +1,16 @@
 <script setup lang="ts">
   import { computed, ref } from 'vue';
-  import AppIcon from '../../components/AppIcon.vue';
-  import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
-  import SmartTaskInput from '../../components/SmartTaskInput.vue';
-  import TaskCard from '../../components/TaskCard.vue';
-  import TaskEditor from '../../components/TaskEditor.vue';
-  import ViewToolbar from '../../components/ViewToolbar.vue';
-  import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
-  import { searchAndSortTasks } from '../../services/searchService';
-  import { taskService } from '../../services/taskService';
-  import { taskWorkflowService } from '../../services/taskWorkflowService';
-  import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOption, TaskStatus } from '../../types/task';
+import AppIcon from '../../components/AppIcon.vue';
+import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
+import SmartTaskInput from '../../components/SmartTaskInput.vue';
+import TaskCard from '../../components/TaskCard.vue';
+import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedModal.vue';
+import TaskEditor from '../../components/TaskEditor.vue';
+import ViewToolbar from '../../components/ViewToolbar.vue';
+import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
+import { searchAndSortTasks } from '../../services/searchService';
+import { taskService } from '../../services/taskService';
+import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOption, TaskStatus } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
@@ -57,6 +57,8 @@
     set: (value) => emit('update:sort', { field: value, order: defaultSortOrder[value] }),
   });
 
+  const reloadTasks = (): void => { /* no-op: tasks come from props */ };
+
   const effectiveSort = computed<TaskSortOption>(() =>
     props.sort ?? { field: 'updatedAt', order: defaultSortOrder.updatedAt },
   );
@@ -71,7 +73,25 @@
     ),
   );
 
-  const { getTaskDepth, getParentTitle } = useTaskHierarchy(() => props.tasks);
+  const taskById = computed(() => new Map(props.tasks.map((task) => [task.id, task])));
+
+  const getTaskDepth = (task: Task): number => {
+    if (!task.parentTaskId) return 0;
+    const visited = new Set<string>([task.id]);
+    let depth = 0;
+    let parentId: string | undefined = task.parentTaskId;
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      depth += 1;
+      parentId = taskById.value.get(parentId)?.parentTaskId;
+    }
+    return depth;
+  };
+
+  const getParentTitle = (task: Task): string => {
+    if (!task.parentTaskId) return '';
+    return taskById.value.get(task.parentTaskId)?.title ?? '';
+  };
 
   const columns = computed<Record<TaskStatus, Task[]>>(() => {
     const g: Record<TaskStatus, Task[]> = { todo: [], doing: [], done: [] };
@@ -79,9 +99,17 @@
     return g;
   });
 
+  const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
+
   const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    taskWorkflowService.changeStatus(taskId, status);
+    guardedChangeStatus(taskId, status);
     emit('refresh');
+  };
+
+  const handleViewBlockedChildren = (): void => {
+    const parent = blockedInfo.value?.parent;
+    dismissBlockedModal();
+    if (parent) handleOpenEdit(parent);
   };
 
   const handleDragStart = (event: DragEvent, task: Task): void => {
@@ -151,9 +179,8 @@
 
     <!-- Board -->
     <div class="board">
-      <div v-for="status in statusOrder" :key="status" class="board-column"
-        :class="{ 'board-column--drag-over': dragOverStatus === status }" @dragover="handleDragOver($event, status)"
-        @dragleave="handleDragLeave(status)" @drop="handleDrop($event, status)">
+      <div v-for="status in statusOrder" :key="status" class="board-column" :class="{ 'board-column--drag-over': dragOverStatus === status }"
+        @dragover="handleDragOver($event, status)" @dragleave="handleDragLeave(status)" @drop="handleDrop($event, status)">
         <!-- Column header -->
         <div class="column-header" :style="{ '--col-color': statusMeta[status].color }">
           <span class="col-dot" />
@@ -187,6 +214,8 @@
     </div>
 
     <TaskEditor v-model="editorVisible" :task="editingTask" @saved="handleSaved" />
+    <TaskCompletionBlockedModal v-if="blockedInfo" :info="blockedInfo" @cancel="dismissBlockedModal"
+      @view-children="handleViewBlockedChildren" />
   </section>
 </template>
 
@@ -279,7 +308,7 @@
     gap: var(--space-2);
   }
 
-  .column-cards>.task-card {
+  .column-cards > .task-card {
     flex: 0 0 auto;
   }
 

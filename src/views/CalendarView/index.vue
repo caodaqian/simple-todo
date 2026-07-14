@@ -1,15 +1,16 @@
 <script setup lang="ts">
   import { computed, onMounted, ref } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
-  import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
+import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
 import SmartTaskInput from '../../components/SmartTaskInput.vue';
 import TaskCard from '../../components/TaskCard.vue';
+import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedModal.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
 import ViewToolbar from '../../components/ViewToolbar.vue';
-  import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
+import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
+import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
-  import { taskWorkflowService } from '../../services/taskWorkflowService';
 import type { CreateTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../types/task';
 import { getTaskStart } from '../../types/task';
 
@@ -94,13 +95,21 @@ import { getTaskStart } from '../../types/task';
     return `${y}年${m}月${d}日`;
   };
 
+  const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
+
   const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    taskWorkflowService.changeStatus(taskId, status);
+    guardedChangeStatus(taskId, status);
     emit('refresh');
   };
 
   const handleToggleDone = (task: Task): void => {
     handleStatusChange(task.id, task.status === 'done' ? 'todo' : 'done');
+  };
+
+  const handleViewBlockedChildren = (): void => {
+    const parent = blockedInfo.value?.parent;
+    dismissBlockedModal();
+    if (parent) handleOpenEdit(parent);
   };
 
   const handleQuickCreate = (payload: CreateTaskInput): void => {
@@ -190,6 +199,8 @@ import { getTaskStart } from '../../types/task';
     </div>
 
     <TaskEditor v-model="editorVisible" :task="editingTask" :initial-due-date="selectedDateKey" @saved="handleSaved" />
+    <TaskCompletionBlockedModal v-if="blockedInfo" :info="blockedInfo" @cancel="dismissBlockedModal"
+      @view-children="handleViewBlockedChildren" />
   </section>
 </template>
 

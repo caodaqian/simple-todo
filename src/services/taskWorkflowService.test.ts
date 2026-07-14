@@ -79,6 +79,46 @@ describe('taskWorkflowService', () => {
 		expect(showNotification).not.toHaveBeenCalled();
 	});
 
+	it('blocks completion of a parent with active children without a text notification', () => {
+		const parent = makeTask({ id: 'parent', title: '整理计划', status: 'doing' });
+		const child = makeTask({ id: 'child', parentTaskId: parent.id, status: 'todo' });
+		taskService.replaceAll([parent, child]);
+
+		expect(taskWorkflowService.changeStatus(parent.id, 'done')).toBeNull();
+		expect(showNotification).not.toHaveBeenCalled();
+	});
+
+	describe('getBlockedCompletionInfo', () => {
+		it('returns parent and counts of doing/todo direct children', () => {
+			const parent = makeTask({ id: 'parent', title: '整理计划', status: 'doing' });
+			const doingChild = makeTask({ id: 'child-doing', parentTaskId: parent.id, status: 'doing' });
+			const todoChildA = makeTask({ id: 'child-todo-a', parentTaskId: parent.id, status: 'todo' });
+			const todoChildB = makeTask({ id: 'child-todo-b', parentTaskId: parent.id, status: 'todo' });
+			const doneChild = makeTask({ id: 'child-done', parentTaskId: parent.id, status: 'done' });
+			taskService.replaceAll([parent, doingChild, todoChildA, todoChildB, doneChild]);
+
+			expect(taskWorkflowService.getBlockedCompletionInfo(parent.id)).toEqual({
+				parent,
+				doingCount: 1,
+				todoCount: 2,
+			});
+		});
+
+		it('returns null when the parent has no active children', () => {
+			const parent = makeTask({ id: 'parent', status: 'doing' });
+			const doneChild = makeTask({ id: 'child', parentTaskId: parent.id, status: 'done' });
+			taskService.replaceAll([parent, doneChild]);
+
+			expect(taskWorkflowService.getBlockedCompletionInfo(parent.id)).toBeNull();
+		});
+
+		it('returns null when the task does not exist', () => {
+			taskService.replaceAll([]);
+
+			expect(taskWorkflowService.getBlockedCompletionInfo('missing')).toBeNull();
+		});
+	});
+
 	it('sends a summary notification for bulk completion', () => {
 		taskService.replaceAll([
 			makeTask({ id: 't1', title: '一', status: 'todo' }),

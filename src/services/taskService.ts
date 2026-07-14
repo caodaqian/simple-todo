@@ -286,6 +286,23 @@ const withArchivedState = (task: Task, archivedAt: number | undefined, now: numb
 	return next;
 };
 
+const getArchiveCascadeIds = (tasks: Task[], taskIds: Iterable<string>): Set<string> => {
+	const existingIds = new Set(tasks.map((task) => task.id));
+	const ids = new Set<string>();
+	for (const taskId of taskIds) {
+		if (existingIds.has(taskId)) {
+			ids.add(taskId);
+		}
+	}
+
+	for (const task of tasks) {
+		if (task.parentTaskId && ids.has(task.parentTaskId)) {
+			ids.add(task.id);
+		}
+	}
+	return ids;
+};
+
 const migrateLegacySubtasks = (tasks: Task[]): { tasks: Task[]; migrated: boolean } => {
 	let migrated = false;
 	const nextTasks: Task[] = [];
@@ -438,6 +455,10 @@ class TaskService {
 		return this.getAll().filter((task) => task.parentTaskId === parentTaskId);
 	}
 
+	getIncompleteChildTasks(parentTaskId: string): Task[] {
+		return this.getChildTasks(parentTaskId).filter((task) => task.status !== 'done');
+	}
+
 	getParentTask(task: Task): Task | null {
 		if (!task.parentTaskId) {
 			return null;
@@ -530,6 +551,9 @@ class TaskService {
 			const next = toSavePayload(input, now, existing);
 			tasks[index] = next;
 			this.saveAll(tasks);
+			if (existing.status !== 'doing' && next.status === 'doing') {
+				this.promoteParentIfTodo(next.parentTaskId);
+			}
 			return next;
 		}
 
@@ -743,11 +767,35 @@ class TaskService {
 	}
 
 	changeStatus(taskId: string, status: TaskStatus): Task | null {
+		if (status === 'done' && this.getIncompleteChildTasks(taskId).length > 0) {
+			return null;
+		}
 		const updated = this.update(taskId, { status });
 		if (updated && status === 'done' && updated.repeat) {
 			this.maybeSpawnNextInstance(updated);
 		}
 		return updated;
+	}
+
+	/**
+	 * 直属子任务进入 doing 时，若父任务仍是 todo，自动提升为 doing。
+	 * 不影响 done/doing 父任务，不递归到更上层。
+	 */
+	private promoteParentIfTodo(parentTaskId: string | undefined): void {
+		if (!parentTaskId) return;
+		const tasks = this.getAll();
+		const parentIndex = tasks.findIndex((task) => task.id === parentTaskId);
+		if (parentIndex === -1) return;
+		const parent = tasks[parentIndex]!;
+		if (parent.status !== 'todo') return;
+		tasks[parentIndex] = {
+			...parent,
+			tags: [...parent.tags],
+			subtasks: cloneSubtasks(parent.subtasks),
+			status: 'doing',
+			updatedAt: Date.now(),
+		};
+		this.saveAll(tasks);
 	}
 
 	/**
@@ -778,6 +826,11 @@ class TaskService {
 		const idSet = new Set(taskIds);
 		const now = Date.now();
 		const tasks = this.getAll();
+		const blockedParentIds = updates.status === 'done'
+			? new Set(tasks
+				.filter((task) => idSet.has(task.id) && tasks.some((child) => child.parentTaskId === task.id && child.status !== 'done'))
+				.map((task) => task.id))
+			: new Set<string>();
 		let count = 0;
 
 		const existingTasks = tasks.slice();
@@ -786,7 +839,7 @@ class TaskService {
 			if (i === -1) {
 				continue;
 			}
-			if (!idSet.has(task.id)) {
+			if (!idSet.has(task.id) || blockedParentIds.has(task.id)) {
 				continue;
 			}
 
@@ -811,6 +864,19 @@ class TaskService {
 					tasks[i] = { ...updated, repeat: next.repeat };
 				}
 				tasks.push(next);
+			}
+			if (task.status !== 'doing' && updated.status === 'doing' && updated.parentTaskId) {
+				const parentIndex = tasks.findIndex((candidate) => candidate.id === updated.parentTaskId);
+				const parent = parentIndex === -1 ? undefined : tasks[parentIndex];
+				if (parent && parent.status === 'todo') {
+					tasks[parentIndex] = {
+						...parent,
+						tags: [...parent.tags],
+						subtasks: cloneSubtasks(parent.subtasks),
+						status: 'doing',
+						updatedAt: now,
+					};
+				}
 			}
 			count += 1;
 		}
@@ -848,12 +914,15 @@ class TaskService {
 		}
 
 		const now = Date.now();
-		const current = tasks[index]!;
-		const next = withArchivedState(current, archivedAt, now);
-
-		tasks[index] = next;
+		const cascadeIds = getArchiveCascadeIds(tasks, [taskId]);
+		for (let i = 0; i < tasks.length; i += 1) {
+			const task = tasks[i];
+			if (task && cascadeIds.has(task.id)) {
+				tasks[i] = withArchivedState(task, archivedAt, now);
+			}
+		}
 		this.saveAll(tasks);
-		return next;
+		return tasks[index] ?? null;
 	}
 
 	private bulkSetArchived(taskIds: string[], archivedAt: number | undefined): number {
@@ -861,9 +930,9 @@ class TaskService {
 			return 0;
 		}
 
-		const idSet = new Set(taskIds);
-		const now = Date.now();
 		const tasks = this.getAll();
+		const idSet = getArchiveCascadeIds(tasks, taskIds);
+		const now = Date.now();
 		let count = 0;
 
 		for (let i = 0; i < tasks.length; i += 1) {

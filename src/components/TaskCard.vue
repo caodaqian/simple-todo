@@ -20,7 +20,7 @@ import AppIcon from './AppIcon.vue';
       maxTags?: number;
       clickable?: boolean;
       depth?: number;
-      parentTitle?: string;
+      parentTitle?: string | undefined;
     }>(),
     {
       variant: 'row',
@@ -151,8 +151,7 @@ import AppIcon from './AppIcon.vue';
         <AppIcon name="listTree" :size="13" />
       </span>
       <label v-if="selectable" class="sr-only" :for="`task-select-${task.id}`">选择任务 {{ task.title }}</label>
-      <input v-if="selectable" :id="`task-select-${task.id}`" type="checkbox" class="task-card__checkbox"
-        :checked="selected"
+      <input v-if="selectable" :id="`task-select-${task.id}`" type="checkbox" class="task-card__checkbox" :checked="selected"
         @click.stop="emit('toggle-select', task)" />
       <button v-else-if="showStatusToggle" type="button" class="task-card__status" :class="task.status"
         :title="`状态: ${task.status}`" @click.stop="emit('toggle-status', task)">

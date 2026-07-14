@@ -541,6 +541,37 @@ describe('taskService', () => {
 	});
 
 	describe('archive', () => {
+		it('archives and restores direct child tasks with their parent', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(12_000);
+			const parent = createTaskFixture({ id: 'parent' });
+			const todoChild = createTaskFixture({ id: 'todo-child', parentTaskId: parent.id, status: 'todo' });
+			const doneChild = createTaskFixture({
+				id: 'done-child',
+				parentTaskId: parent.id,
+				status: 'done',
+				completedAt: 10_000,
+			});
+			const unrelated = createTaskFixture({ id: 'unrelated' });
+			taskService.replaceAll([parent, todoChild, doneChild, unrelated]);
+
+			expect(taskServiceWithArchive.archive(parent.id)).toMatchObject({ archivedAt: 12_000 });
+			expect(taskService.getById(todoChild.id)).toMatchObject({ archivedAt: 12_000, updatedAt: 12_000 });
+			expect(taskService.getById(doneChild.id)).toMatchObject({
+			archivedAt: 12_000,
+			updatedAt: 12_000,
+			status: 'done',
+			completedAt: 10_000,
+		});
+		expect(taskService.getById(unrelated.id)).not.toHaveProperty('archivedAt');
+
+			vi.spyOn(Date, 'now').mockReturnValue(13_000);
+			expect(taskServiceWithArchive.unarchive(parent.id)).not.toHaveProperty('archivedAt');
+			expect(taskService.getById(todoChild.id)).toMatchObject({ updatedAt: 13_000 });
+			expect(taskService.getById(todoChild.id)).not.toHaveProperty('archivedAt');
+			expect(taskService.getById(doneChild.id)).toMatchObject({ status: 'done', completedAt: 10_000, updatedAt: 13_000 });
+			expect(taskService.getById(doneChild.id)).not.toHaveProperty('archivedAt');
+		});
+
 		it('archives and restores a task without deleting it', () => {
 			vi.spyOn(Date, 'now').mockReturnValue(12_000);
 			const task = createTaskFixture({ id: 'archive-me', updatedAt: 100 });
@@ -582,6 +613,77 @@ describe('taskService', () => {
 			expect(taskServiceWithArchive.unarchive('missing')).toBeNull();
 			expect(taskServiceWithArchive.bulkArchive(['missing'])).toBe(0);
 			expect(taskService.getAll()).toEqual([task]);
+		});
+	});
+
+	describe('parent completion', () => {
+		it('does not complete a parent while a direct child remains active', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(12_000);
+			const parent = createTaskFixture({ id: 'parent', status: 'doing', updatedAt: 100 });
+			const activeChild = createTaskFixture({ id: 'child', parentTaskId: parent.id, status: 'todo' });
+			taskService.replaceAll([parent, activeChild]);
+
+			expect(taskService.changeStatus(parent.id, 'done')).toBeNull();
+			expect(taskService.getById(parent.id)).toMatchObject({ status: 'doing', updatedAt: 100 });
+			expect(taskService.getById(parent.id)).not.toHaveProperty('completedAt');
+		});
+
+		it('completes a parent after all direct children are done', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(12_000);
+			const parent = createTaskFixture({ id: 'parent', status: 'doing' });
+			const child = createTaskFixture({ id: 'child', parentTaskId: parent.id, status: 'done', completedAt: 10_000 });
+			taskService.replaceAll([parent, child]);
+
+			expect(taskService.changeStatus(parent.id, 'done')).toMatchObject({ status: 'done', completedAt: 12_000 });
+		});
+	});
+
+	describe('parent auto-promotion when a child starts', () => {
+		it('promotes a todo parent to doing when a direct child changes to doing', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(20_000);
+			const parent = createTaskFixture({ id: 'parent', status: 'todo', updatedAt: 100 });
+			const child = createTaskFixture({ id: 'child', parentTaskId: parent.id, status: 'todo' });
+			taskService.replaceAll([parent, child]);
+
+			expect(taskService.changeStatus(child.id, 'doing')).toMatchObject({ status: 'doing' });
+			expect(taskService.getById(parent.id)).toMatchObject({ status: 'doing', updatedAt: 20_000 });
+		});
+
+		it('does not touch a parent that is already doing or done', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(20_000);
+			const doingParent = createTaskFixture({ id: 'doing-parent', status: 'doing', updatedAt: 100 });
+			const doneParent = createTaskFixture({ id: 'done-parent', status: 'done', updatedAt: 200 });
+			const childOfDoing = createTaskFixture({ id: 'child-a', parentTaskId: doingParent.id, status: 'todo' });
+			const childOfDone = createTaskFixture({ id: 'child-b', parentTaskId: doneParent.id, status: 'todo' });
+			taskService.replaceAll([doingParent, doneParent, childOfDoing, childOfDone]);
+
+			taskService.changeStatus(childOfDoing.id, 'doing');
+			taskService.changeStatus(childOfDone.id, 'doing');
+
+			expect(taskService.getById(doingParent.id)).toMatchObject({ updatedAt: 100 });
+			expect(taskService.getById(doneParent.id)).toMatchObject({ status: 'done', updatedAt: 200 });
+		});
+
+		it('does nothing when the task has no parent', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(20_000);
+			const task = createTaskFixture({ id: 'solo', status: 'todo' });
+			taskService.replaceAll([task]);
+
+			expect(taskService.changeStatus(task.id, 'doing')).toMatchObject({ status: 'doing' });
+		});
+
+		it('promotes multiple distinct todo parents during a bulk update', () => {
+			vi.spyOn(Date, 'now').mockReturnValue(20_000);
+			const parentA = createTaskFixture({ id: 'parent-a', status: 'todo' });
+			const parentB = createTaskFixture({ id: 'parent-b', status: 'todo' });
+			const childA = createTaskFixture({ id: 'child-a', parentTaskId: parentA.id, status: 'todo' });
+			const childB = createTaskFixture({ id: 'child-b', parentTaskId: parentB.id, status: 'todo' });
+			taskService.replaceAll([parentA, parentB, childA, childB]);
+
+			expect(taskService.bulkUpdate([childA.id, childB.id], { status: 'doing' })).toBe(2);
+
+			expect(taskService.getById(parentA.id)).toMatchObject({ status: 'doing' });
+			expect(taskService.getById(parentB.id)).toMatchObject({ status: 'doing' });
 		});
 	});
 });

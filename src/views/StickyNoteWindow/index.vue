@@ -3,11 +3,12 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
 import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
 import PomodoroStatusPill from '../../components/PomodoroStatusPill.vue';
+import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedModal.vue';
+import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
 import { renderMarkdown } from '../../services/markdownService';
 import { stickyNoteService } from '../../services/stickyNoteService';
 import { buildStickyTaskGroups } from '../../services/stickyViewProjection';
 import { taskService } from '../../services/taskService';
-import { taskWorkflowService } from '../../services/taskWorkflowService';
 import type { StickyNoteSource, StickyTaskItem } from '../../types/stickyNote';
 import type { Task, TaskPriority, TaskStatus } from '../../types/task';
 import { useStickyDetailMenu } from './useStickyDetailMenu';
@@ -118,9 +119,17 @@ const refreshAfterWrite = (): void => {
   notifyParentChanged();
 };
 
+const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
+
 const handleStatusChange = (task: Task, status: TaskStatus): void => {
-  taskWorkflowService.changeStatus(task.id, status);
+  guardedChangeStatus(task.id, status);
   refreshAfterWrite();
+};
+
+const handleViewBlockedChildren = (): void => {
+  const parent = blockedInfo.value?.parent;
+  dismissBlockedModal();
+  if (parent) detailMenu.open(parent.id);
 };
 
 const closeWindow = (): void => {
@@ -263,6 +272,8 @@ onUnmounted(() => {
         </div>
       </div>
     </aside>
+    <TaskCompletionBlockedModal v-if="blockedInfo" :info="blockedInfo" @cancel="dismissBlockedModal"
+      @view-children="handleViewBlockedChildren" />
   </section>
 </template>
 

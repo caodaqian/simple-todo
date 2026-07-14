@@ -1,14 +1,15 @@
 <script setup lang="ts">
   import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { useCompletionBlockedModal } from '../composables/useCompletionBlockedModal';
 import { renderMarkdown } from '../services/markdownService';
 import { notify } from '../services/notifyService';
 import { taskService } from '../services/taskService';
-import { taskWorkflowService } from '../services/taskWorkflowService';
 import { templateService, type CreateTemplateInput } from '../services/templateService';
 import type { RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
 import { getTaskEnd, getTaskStart } from '../types/task';
 import AppIcon from './AppIcon.vue';
 import PomodoroStartButton from './PomodoroStartButton.vue';
+import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
 
   type RepeatFormType = '' | RepeatRule['type'];
 
@@ -626,6 +627,8 @@ import PomodoroStartButton from './PomodoroStartButton.vue';
     emit('saved', task);
   };
 
+  const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
+
   const handleSubtaskStatusChange = (subtask: Task, status: TaskStatus): void => {
     errorMessage.value = '';
     const task = currentTask.value;
@@ -635,9 +638,11 @@ import PomodoroStartButton from './PomodoroStartButton.vue';
       );
       return;
     }
-    const updated = taskWorkflowService.changeStatus(subtask.id, status);
+    const updated = guardedChangeStatus(subtask.id, status);
     if (!updated) {
-      errorMessage.value = '更新子任务状态失败，请重试';
+      if (!blockedInfo.value) {
+        errorMessage.value = '更新子任务状态失败，请重试';
+      }
       return;
     }
     subtasks.value = subtasks.value.map((item) =>
@@ -645,6 +650,12 @@ import PomodoroStartButton from './PomodoroStartButton.vue';
     );
     lastFlushedSnapshot = formSnapshot();
     emit('saved', task);
+  };
+
+  const handleViewBlockedChildren = (): void => {
+    const parent = blockedInfo.value?.parent;
+    dismissBlockedModal();
+    if (parent) openTaskInEditor(parent);
   };
 
   const handleDeleteSubtask = (subtaskId: string): void => {
@@ -1240,6 +1251,8 @@ id="task-tag-input"
       </dialog>
     </div>
   </Teleport>
+  <TaskCompletionBlockedModal v-if="blockedInfo" :info="blockedInfo" @cancel="dismissBlockedModal"
+    @view-children="handleViewBlockedChildren" />
 </template>
 
 <style scoped>

@@ -1,16 +1,17 @@
 <script setup lang="ts">
   import { computed, ref } from 'vue';
-  import AppIcon from '../../components/AppIcon.vue';
-  import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
-  import SmartTaskInput from '../../components/SmartTaskInput.vue';
-  import TaskCard from '../../components/TaskCard.vue';
-  import TaskEditor from '../../components/TaskEditor.vue';
-  import ViewToolbar from '../../components/ViewToolbar.vue';
-  import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
-  import { searchAndSortTasks } from '../../services/searchService';
-  import { taskService } from '../../services/taskService';
-  import { taskWorkflowService } from '../../services/taskWorkflowService';
-  import type { SaveTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../types/task';
+import AppIcon from '../../components/AppIcon.vue';
+import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
+import SmartTaskInput from '../../components/SmartTaskInput.vue';
+import TaskCard from '../../components/TaskCard.vue';
+import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedModal.vue';
+import TaskEditor from '../../components/TaskEditor.vue';
+import ViewToolbar from '../../components/ViewToolbar.vue';
+import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
+import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
+import { searchAndSortTasks } from '../../services/searchService';
+import { taskService } from '../../services/taskService';
+import type { SaveTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
@@ -64,9 +65,17 @@
   const formatDate = (ts?: number): string =>
     ts ? new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '';
 
+  const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
+
   const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    taskWorkflowService.changeStatus(taskId, status);
+    guardedChangeStatus(taskId, status);
     emit('refresh');
+  };
+
+  const handleViewBlockedChildren = (): void => {
+    const parent = blockedInfo.value?.parent;
+    dismissBlockedModal();
+    if (parent) handleOpenEdit(parent);
   };
 
   const handleQuickCreate = (payload: SaveTaskInput): void => {
@@ -142,6 +151,8 @@
     </div>
 
     <TaskEditor v-model="editorVisible" :task="editingTask" @saved="handleSaved" />
+    <TaskCompletionBlockedModal v-if="blockedInfo" :info="blockedInfo" @cancel="dismissBlockedModal"
+      @view-children="handleViewBlockedChildren" />
   </section>
 </template>
 
