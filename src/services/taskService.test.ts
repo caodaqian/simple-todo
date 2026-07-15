@@ -377,6 +377,32 @@ describe('taskService', () => {
 		expect(taskService.getById(parent.id)?.subtasks).toEqual([]);
 	});
 
+	it('addSubtask applies explicitly provided metadata instead of inheriting it', () => {
+		const parent = createTaskFixture({
+			id: 'parent',
+			priority: 'urgent',
+			tags: ['work'],
+			group: 'project-a',
+		});
+		taskService.replaceAll([parent]);
+
+		const child = taskService.addSubtask(parent.id, '独立属性子任务', {
+			priority: 'low',
+			tags: ['personal'],
+			group: 'inbox',
+			dueStart: 10_000,
+			allDay: true,
+		})!;
+
+		expect(child).toMatchObject({
+			priority: 'low',
+			tags: ['personal'],
+			group: 'inbox',
+			dueStart: 10_000,
+			allDay: true,
+		});
+	});
+
 	it('updateSubtask maps completed to child task status', () => {
 		const parent = createTaskFixture({ id: 'parent' });
 		const child = createTaskFixture({ id: 'child', parentTaskId: parent.id, status: 'todo' });

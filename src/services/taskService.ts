@@ -73,6 +73,11 @@ type TaskDraft = Omit<
 
 type TaskSubtaskCompat = Task & Pick<Subtask, 'completed'>;
 
+export type AddSubtaskOverrides = Partial<Pick<
+	CreateTaskInput,
+	'priority' | 'tags' | 'group' | 'dueStart' | 'dueEnd' | 'allDay'
+>>;
+
 const hasOwn = (value: object, key: PropertyKey): boolean => Object.prototype.hasOwnProperty.call(value, key);
 
 const buildTask = (task: TaskDraft): Task => {
@@ -727,7 +732,7 @@ class TaskService {
 		return true;
 	}
 
-	addSubtask(taskId: string, title: string): TaskSubtaskCompat | null {
+	addSubtask(taskId: string, title: string, overrides?: AddSubtaskOverrides): TaskSubtaskCompat | null {
 		const task = this.getById(taskId);
 		if (!task) {
 			return null;
@@ -736,9 +741,12 @@ class TaskService {
 		const child = this.saveTask({
 			title,
 			status: 'todo',
-			priority: task.priority,
-			tags: [...task.tags],
-			group: task.group,
+			priority: overrides?.priority ?? task.priority,
+			tags: overrides?.tags ?? [...task.tags],
+			group: overrides?.group ?? task.group,
+			dueStart: overrides?.dueStart,
+			dueEnd: overrides?.dueEnd,
+			allDay: overrides?.allDay,
 			description: '',
 			subtasks: [],
 			parentTaskId: task.id,

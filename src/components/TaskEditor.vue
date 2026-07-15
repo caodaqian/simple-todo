@@ -1,17 +1,26 @@
 <script setup lang="ts">
   import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useCompletionBlockedModal } from '../composables/useCompletionBlockedModal';
+import { useImeGuard } from '../composables/useImeGuard';
 import { renderMarkdown } from '../services/markdownService';
 import { notify } from '../services/notifyService';
-import { taskService } from '../services/taskService';
+import { taskService, type AddSubtaskOverrides } from '../services/taskService';
 import { templateService, type CreateTemplateInput } from '../services/templateService';
-import type { RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
+import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
 import { getTaskEnd, getTaskStart } from '../types/task';
 import AppIcon from './AppIcon.vue';
 import PomodoroStartButton from './PomodoroStartButton.vue';
+import SmartTaskInput from './SmartTaskInput.vue';
 import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
 
   type RepeatFormType = '' | RepeatRule['type'];
+
+  interface SmartInputAttributes {
+    priority: boolean;
+    group: boolean;
+    tags: boolean;
+    schedule: boolean;
+  }
 
   interface TaskEditorForm {
     title: string;
@@ -63,7 +72,6 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
   const currentTask = ref<Task | null>(null);
   const parentTask = ref<Task | null>(null);
   const subtasks = ref<Task[]>([]);
-  const newSubtaskTitle = ref('');
   const errorMessage = ref('');
   const templates = ref<TaskTemplate[]>([]);
   const selectedTemplateId = ref('');
@@ -76,6 +84,8 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
   const groupDraft = ref('');
   const showGroupSuggest = ref(false);
   const activeGroupIndex = ref(-1);
+  const tagImeGuard = useImeGuard();
+  const groupImeGuard = useImeGuard();
 
   // 自动保存相关
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -303,20 +313,23 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
     return 'todo';
   };
 
-  const makeLocalSubtask = (title: string): Task => {
+  const makeLocalSubtask = (title: string, overrides?: AddSubtaskOverrides): Task => {
     const now = Date.now();
     const draft: Task = {
       id: `draft-${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
       title,
       status: 'todo',
-      priority: form.value.priority,
-      tags: [...form.value.tags],
-      group: form.value.group.trim(),
+      priority: overrides?.priority ?? form.value.priority,
+      tags: overrides?.tags ?? [...form.value.tags],
+      group: overrides?.group ?? form.value.group.trim(),
       description: '',
       subtasks: [],
       createdAt: now,
       updatedAt: now,
     };
+    if (overrides?.dueStart !== undefined) draft.dueStart = overrides.dueStart;
+    if (overrides?.dueEnd !== undefined) draft.dueEnd = overrides.dueEnd;
+    if (overrides?.allDay !== undefined) draft.allDay = overrides.allDay;
     return draft;
   };
 
@@ -411,6 +424,7 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
     form.value.tags = form.value.tags.filter((t) => t !== tag);
   };
   const onTagKeydown = (e: KeyboardEvent): void => {
+    if (tagImeGuard.shouldIgnoreKeydown(e)) return;
     if (e.key === 'Enter' || e.key === ',' || e.key === '，') {
       e.preventDefault();
       if (activeTagIndex.value >= 0 && filteredTagSuggest.value[activeTagIndex.value]) {
@@ -461,6 +475,7 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
 
   // ─── Group chip 处理 ───────────────────────────────────
   const onGroupKeydown = (e: KeyboardEvent): void => {
+    if (groupImeGuard.shouldIgnoreKeydown(e)) return;
     if (e.key === 'Enter' || e.key === ',' || e.key === '，') {
       e.preventDefault();
       if (activeGroupIndex.value >= 0 && filteredGroupSuggest.value[activeGroupIndex.value]) {
@@ -559,7 +574,6 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
     groupDraft.value = '';
     showTagSuggest.value = false;
     showGroupSuggest.value = false;
-    newSubtaskTitle.value = '';
     errorMessage.value = '';
     lastFlushedSnapshot = formSnapshot();
     // 重置描述预览：立即渲染一次，并回到预览模式
@@ -605,26 +619,40 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
     emit('update:modelValue', false);
   };
 
-  const handleAddSubtask = (): void => {
-    const title = newSubtaskTitle.value.trim();
+  const handleAddSubtask = (rawTitle: string, overrides?: AddSubtaskOverrides): void => {
+    const title = rawTitle.trim();
     if (!title) return;
     errorMessage.value = '';
     if (isChildTask.value) return;
     const task = currentTask.value;
     if (!task) {
-      subtasks.value = [...subtasks.value, makeLocalSubtask(title)];
-      newSubtaskTitle.value = '';
+      subtasks.value = [...subtasks.value, makeLocalSubtask(title, overrides)];
       return;
     }
-    const created = taskService.addSubtask(task.id, title);
+    const created = taskService.addSubtask(task.id, title, overrides);
     if (!created) {
       errorMessage.value = '新增子任务失败，请重试';
       return;
     }
     subtasks.value = taskService.getChildTasks(task.id);
-    newSubtaskTitle.value = '';
     lastFlushedSnapshot = formSnapshot(); // 子任务已落库，避免误触发
     emit('saved', task);
+  };
+
+  const handleCreateSubtaskFromInput = (
+    input: CreateTaskInput,
+    attributes: SmartInputAttributes,
+  ): void => {
+    const overrides: AddSubtaskOverrides = {};
+    if (attributes.priority) overrides.priority = input.priority;
+    if (attributes.group) overrides.group = input.group;
+    if (attributes.tags) overrides.tags = input.tags;
+    if (attributes.schedule) {
+      overrides.dueStart = input.dueStart;
+      overrides.dueEnd = input.dueEnd;
+      overrides.allDay = input.allDay;
+    }
+    handleAddSubtask(input.title, overrides);
   };
 
   const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
@@ -977,6 +1005,8 @@ id="task-group-input"
                     class="chip-input"
                     placeholder="如：工作 / 生活"
                     @keydown="onGroupKeydown"
+                    @compositionstart="groupImeGuard.onCompositionStart"
+                    @compositionend="groupImeGuard.onCompositionEnd"
                     @focus="onGroupFocus"
                     @blur="onGroupBlur"
                   />
@@ -1007,6 +1037,8 @@ id="task-tag-input"
                     class="chip-input"
                     placeholder="Enter 或逗号确认"
                     @keydown="onTagKeydown"
+                    @compositionstart="tagImeGuard.onCompositionStart"
+                    @compositionend="tagImeGuard.onCompositionEnd"
                     @focus="onTagFocus"
                     @blur="onTagBlur"
                   />
@@ -1196,10 +1228,11 @@ id="task-tag-input"
               </div>
 
               <div v-if="!isChildTask" class="subtask-create-panel">
-                <label class="sr-only" for="new-subtask-title-input">输入子任务标题</label>
-                <input id="new-subtask-title-input" v-model.trim="newSubtaskTitle" type="text" placeholder="输入子任务标题"
-                  @keydown.enter.prevent="handleAddSubtask" />
-                <button type="button" class="btn btn-primary" @click="handleAddSubtask">新增</button>
+                <SmartTaskInput
+                  placeholder="输入子任务标题，!优先级 ~分组 #标签"
+                  submit-label="新增"
+                  @create="handleCreateSubtaskFromInput"
+                />
               </div>
               <p v-else class="subtask-context-hint">当前任务是子任务，可从父任务中管理同级执行项。</p>
 

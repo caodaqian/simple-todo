@@ -8,6 +8,7 @@ import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedMo
 import TaskEditor from '../../components/TaskEditor.vue';
 import ViewToolbar from '../../components/ViewToolbar.vue';
 import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
+import { useImeGuard } from '../../composables/useImeGuard';
 import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
 import { buildCompletedListRows } from '../../services/listViewProjection';
 import { searchAndSortTasks } from '../../services/searchService';
@@ -34,6 +35,7 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
   const selectedIds = ref<Set<string>>(new Set());
   const batchPriority = ref<TaskPriority>('medium');
   const batchGroup = ref('');
+  const batchGroupImeGuard = useImeGuard();
 
   const sortOptions: Array<{ label: string; value: TaskSortField }> = [
     { label: '优先级', value: 'priority' },
@@ -170,6 +172,12 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
     finalizeBatch();
   };
 
+  const onBatchGroupKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Enter' || batchGroupImeGuard.shouldIgnoreKeydown(event)) return;
+    event.preventDefault();
+    batchSetGroup();
+  };
+
   const batchDelete = (): void => {
     if (selectedIds.value.size === 0) return;
     if (!window.confirm(`确定删除选中的 ${selectedIds.value.size} 条任务？`)) return;
@@ -277,7 +285,9 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
         <label class="sr-only" for="batch-group-input">批量修改分组</label>
         <input id="batch-group-input" class="batch-input" list="batch-group-options" v-model="batchGroup"
           placeholder="改分组"
-          @keydown.enter.prevent="batchSetGroup" />
+          @keydown="onBatchGroupKeydown"
+          @compositionstart="batchGroupImeGuard.onCompositionStart"
+          @compositionend="batchGroupImeGuard.onCompositionEnd" />
         <datalist id="batch-group-options">
           <option v-for="g in groupOptions" :key="g" :value="g" />
         </datalist>

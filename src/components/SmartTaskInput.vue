@@ -1,16 +1,26 @@
 <script setup lang="ts">
 	import { computed, nextTick, onUnmounted, ref, watch, type CSSProperties } from 'vue';
 import { parseDateFromText } from '../composables/useDateParser';
+import { useImeGuard } from '../composables/useImeGuard';
 import { taskService } from '../services/taskService';
 import type { CreateTaskInput, TaskPriority } from '../types/task';
 
+	const props = withDefaults(defineProps<{
+		placeholder?: string;
+		submitLabel?: string;
+	}>(), {
+		placeholder: '输入任务标题，!优先级 ~分组 #标签',
+		submitLabel: '',
+	});
+
 	const emit = defineEmits<{
-		(event: 'create', payload: CreateTaskInput): void;
+		(event: 'create', payload: CreateTaskInput, attributes: SmartInputAttributes): void;
 	}>();
 
 	const rawInput = ref('');
 	const inputRef = ref<HTMLInputElement | null>(null);
 	const isFocused = ref(false);
+	const { onCompositionStart, onCompositionEnd, shouldIgnoreKeydown } = useImeGuard();
 
 	/* ── Parser ───────────────────────────────────────────────────── */
 	const PRIORITY_MAP: Record<string, TaskPriority> = {
@@ -28,6 +38,17 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 		dueStart?: number | undefined;
 		allDay?: boolean | undefined;
 		hasAttributes: boolean;
+		hasPriority: boolean;
+		hasGroup: boolean;
+		hasTags: boolean;
+		hasSchedule: boolean;
+	}
+
+	interface SmartInputAttributes {
+		priority: boolean;
+		group: boolean;
+		tags: boolean;
+		schedule: boolean;
 	}
 
 	const parseInput = (raw: string): ParsedResult => {
@@ -36,11 +57,13 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 
 		// Extract priority: !high, !h, !高 etc.
 		let priority: TaskPriority = 'medium';
+		let hasPriority = false;
 		const priorityMatch = text.match(/!([^\s]+)/);
 		if (priorityMatch) {
 			const key = priorityMatch[1]!.toLowerCase();
 			if (PRIORITY_MAP[key]) {
 				priority = PRIORITY_MAP[key];
+				hasPriority = true;
 				text = text.replace(priorityMatch[0], '').trim();
 			}
 		}
@@ -48,6 +71,7 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 		// Extract group: ~group-name
 		let group = '';
 		const groupMatch = text.match(/~([^\s]+)/);
+		const hasGroup = !!groupMatch;
 		if (groupMatch) {
 			group = groupMatch[1]!;
 			text = text.replace(groupMatch[0], '').trim();
@@ -68,7 +92,11 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 			tags,
 			dueStart,
 			allDay,
-			hasAttributes: !!(priorityMatch || groupMatch || tags.length > 0 || dueStart !== undefined),
+			hasAttributes: hasPriority || hasGroup || tags.length > 0 || dueStart !== undefined,
+			hasPriority,
+			hasGroup,
+			hasTags: tags.length > 0,
+			hasSchedule: dueStart !== undefined,
 		};
 	};
 
@@ -248,7 +276,36 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 		});
 	};
 
+	const submit = (): void => {
+		if (!parsed.value.title.trim()) return;
+
+		const payload: CreateTaskInput = {
+			title: parsed.value.title,
+			status: 'todo',
+			priority: parsed.value.priority,
+			group: parsed.value.group,
+			tags: parsed.value.tags,
+			description: '',
+		};
+
+		if (parsed.value.dueStart !== undefined) {
+			payload.dueStart = parsed.value.dueStart;
+			if (parsed.value.allDay) payload.allDay = true;
+		}
+
+		emit('create', payload, {
+			priority: parsed.value.hasPriority,
+			group: parsed.value.hasGroup,
+			tags: parsed.value.hasTags,
+			schedule: parsed.value.hasSchedule,
+		});
+		rawInput.value = '';
+		showSuggestions.value = false;
+	};
+
 	const handleKeydown = (e: KeyboardEvent): void => {
+		if (shouldIgnoreKeydown(e)) return;
+
 		if (showSuggestions.value && suggestions.value.length > 0) {
 			if (e.key === 'ArrowDown') {
 				e.preventDefault();
@@ -273,23 +330,8 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 		}
 
 		if (e.key === 'Enter' && parsed.value.title.trim()) {
-			const payload: CreateTaskInput = {
-				title: parsed.value.title,
-				status: 'todo',
-				priority: parsed.value.priority,
-				group: parsed.value.group,
-				tags: parsed.value.tags,
-				description: '',
-			};
-
-			if (parsed.value.dueStart !== undefined) {
-				payload.dueStart = parsed.value.dueStart;
-				if (parsed.value.allDay) payload.allDay = true;
-			}
-
-			emit('create', payload);
-			rawInput.value = '';
-			showSuggestions.value = false;
+			e.preventDefault();
+			submit();
 		}
 	};
 
@@ -318,9 +360,15 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 				#{{ tag }}
 			</span>
 		</div>
-		<input ref="inputRef" v-model="rawInput" class="smart-input" type="text"
-			placeholder="输入任务标题，!优先级 ~分组 #标签" @input="updateSuggestions" @keydown="handleKeydown"
-			@click="updateSuggestions" @focus="isFocused = true" @blur="isFocused = false" />
+		<div class="smart-input-row">
+			<input ref="inputRef" v-model="rawInput" class="smart-input" type="text"
+				:placeholder="props.placeholder" @input="updateSuggestions" @keydown="handleKeydown"
+				@compositionstart="onCompositionStart" @compositionend="onCompositionEnd"
+				@click="updateSuggestions" @focus="isFocused = true" @blur="isFocused = false" />
+			<button v-if="props.submitLabel" type="button" class="smart-input-submit" @click="submit">
+				{{ props.submitLabel }}
+			</button>
+		</div>
 		<!-- Suggestion dropdown (teleported to body to escape overflow ancestors) -->
 		<Teleport to="body">
 			<div v-if="showSuggestions" ref="dropdownRef" class="smart-input-dropdown"
@@ -368,6 +416,7 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 	}
 
 	.smart-input {
+		flex: 1;
 		height: 36px;
 		font: inherit;
 		font-size: 13px;
@@ -380,6 +429,28 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 		transition: border-color 0.15s;
 		width: 100%;
 		box-sizing: border-box;
+	}
+
+	.smart-input-row {
+		display: flex;
+		gap: 8px;
+	}
+
+	.smart-input-submit {
+		flex: 0 0 auto;
+		padding: 0 14px;
+		border: 1px solid var(--color-primary);
+		border-radius: var(--radius-sm);
+		background: var(--color-primary);
+		color: var(--color-text-inverse);
+		font: inherit;
+		font-size: 13px;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.smart-input-submit:hover {
+		background: var(--color-primary-hover);
 	}
 
 	.smart-input:focus {

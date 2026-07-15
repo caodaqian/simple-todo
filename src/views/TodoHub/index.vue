@@ -6,6 +6,7 @@ import PomodoroStatusPill from '../../components/PomodoroStatusPill.vue';
 import SettingsPanel from '../../components/SettingsPanel.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
 import TaskReviewPanel from '../../components/TaskReviewPanel.vue';
+import { useImeGuard } from '../../composables/useImeGuard';
 import { catchUpReminders, useReminderScheduler } from '../../composables/useReminderScheduler';
 import { mergePatch, toggleArrayValue } from '../../services/filterUtils';
 import { notifyService } from '../../services/notifyService';
@@ -76,6 +77,7 @@ import ListView from '../ListView/index.vue';
   const savingViewMode = ref(false);
   const newViewName = ref('');
   const savedViewInputRef = ref<HTMLInputElement | null>(null);
+  const savedViewImeGuard = useImeGuard();
 
   const saveCurrentView = (): void => {
     savingViewMode.value = true;
@@ -102,6 +104,12 @@ import ListView from '../ListView/index.vue';
     settings.value = settingsService.getSettings();
     savingViewMode.value = false;
     newViewName.value = '';
+  };
+
+  const onSavedViewKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Enter' || savedViewImeGuard.shouldIgnoreKeydown(event)) return;
+    event.preventDefault();
+    confirmSaveView();
   };
 
   const cancelSaveView = (): void => {
@@ -419,7 +427,9 @@ import ListView from '../ListView/index.vue';
             v-model.trim="newViewName"
             type="text"
             placeholder="视图名称"
-            @keydown.enter.prevent="confirmSaveView"
+            @keydown="onSavedViewKeydown"
+            @compositionstart="savedViewImeGuard.onCompositionStart"
+            @compositionend="savedViewImeGuard.onCompositionEnd"
             @keydown.esc="cancelSaveView"
             @blur="cancelSaveView"
           />
