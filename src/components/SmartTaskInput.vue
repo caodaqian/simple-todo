@@ -289,7 +289,7 @@ import type { CreateTaskInput, TaskPriority } from '../types/task';
 		};
 
 		if (parsed.value.dueStart !== undefined) {
-			payload.dueStart = parsed.value.dueStart;
+			payload.dueEnd = parsed.value.dueStart;
 			if (parsed.value.allDay) payload.allDay = true;
 		}
 

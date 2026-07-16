@@ -82,23 +82,25 @@ import AppIcon from './AppIcon.vue';
 
   function formatDueLabel(task: Task): string {
     const start = getTaskStart(task);
-    if (start === undefined) return '';
-    if (task.allDay) {
-      return new Date(start).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+    const deadline = getTaskEnd(task);
+    if (start === undefined && deadline === undefined) return '';
+    // 时间段：起止两端均存在且不同
+    if (start !== undefined && deadline !== undefined && start !== deadline) {
+      if (task.allDay) {
+        return `${formatDate(start)} ~ ${formatDate(deadline)} 全天`;
+      }
+      const startDate = formatDate(start);
+      const endDate = formatDate(deadline);
+      // 同一天：紧凑显示日期 + 起止时间
+      if (startDate === endDate) {
+        return `${startDate} ${formatTime(start)}-${formatTime(deadline)}`;
+      }
+      return `${startDate} ${formatTime(start)} - ${endDate} ${formatTime(deadline)}`;
     }
-    const end = getTaskEnd(task);
-    if (end !== undefined && end !== start) {
-      // 时间段：显示 日期 + 起止时间
-      return `${new Date(start).toLocaleDateString('zh-CN', {
-        month: 'numeric',
-        day: 'numeric',
-      })} ${formatTime(start)}-${formatTime(end)}`;
-    }
-    // 瞬时：日期 + 时间
-    return `${new Date(start).toLocaleDateString('zh-CN', {
-      month: 'numeric',
-      day: 'numeric',
-    })} ${formatTime(start)}`;
+    // 单点截止：以 deadline (getTaskEnd) 为准
+    const ts = deadline ?? start;
+    if (ts === undefined) return '';
+    return task.allDay ? formatDate(ts) : `${formatDate(ts)} ${formatTime(ts)}`;
   }
 
   function isOverdue(task: Task): boolean {

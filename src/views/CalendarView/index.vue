@@ -12,7 +12,7 @@ import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
 import type { CreateTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../types/task';
-import { getTaskStart } from '../../types/task';
+import { getTaskEnd, getTaskStart } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
@@ -51,8 +51,27 @@ import { getTaskStart } from '../../types/task';
     const map = new Map<string, Task[]>();
     for (const t of filteredTasks.value) {
       const start = getTaskStart(t);
-      if (start === undefined) continue;
-      const k = toKey(start);
+      const deadline = getTaskEnd(t);
+      if (start === undefined && deadline === undefined) continue;
+      // 全天跨日区间：投影到覆盖的每一天（含首尾）
+      if (t.allDay === true && start !== undefined && deadline !== undefined && start !== deadline) {
+        const cur = new Date(start);
+        cur.setHours(0, 0, 0, 0);
+        const last = new Date(deadline);
+        last.setHours(0, 0, 0, 0);
+        while (cur.getTime() <= last.getTime()) {
+          const k = toKey(cur.getTime());
+          if (!map.has(k)) map.set(k, []);
+          map.get(k)!.push(t);
+          cur.setDate(cur.getDate() + 1);
+        }
+        continue;
+      }
+      // 单点 / 精确时刻区间：按起始日（区间）或截止日（单点）入桶
+      const bucketTs = (start !== undefined && deadline !== undefined && start !== deadline)
+        ? (start ?? deadline!)
+        : (deadline ?? start!);
+      const k = toKey(bucketTs);
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(t);
     }

@@ -11,6 +11,7 @@ import { buildStickyTaskGroups } from '../../services/stickyViewProjection';
 import { taskService } from '../../services/taskService';
 import type { StickyNoteSource, StickyTaskItem } from '../../types/stickyNote';
 import type { Task, TaskPriority, TaskStatus } from '../../types/task';
+import { getTaskEnd, getTaskStart } from '../../types/task';
 import { useStickyDetailMenu } from './useStickyDetailMenu';
 
 const TASKS_CHANGED_EVENT = 'jianyue:tasks-changed';
@@ -141,11 +142,23 @@ const stickyTaskStyle = (item: StickyTaskItem): Record<string, string> => ({
 });
 
 const formatDue = (task: Task): string => {
-  const timestamp = task.dueStart ?? task.dueDate;
-  if (timestamp === undefined) return '';
-  return new Date(timestamp).toLocaleString('zh-CN', {
-    month: 'numeric',
-    day: 'numeric',
+    const start = getTaskStart(task);
+    const deadline = getTaskEnd(task);
+    if (start === undefined && deadline === undefined) return '';
+    if (start !== undefined && deadline !== undefined && start !== deadline) {
+      const fmt = (ts: number): string => new Date(ts).toLocaleString('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: task.allDay ? undefined : '2-digit',
+        minute: task.allDay ? undefined : '2-digit',
+        hour12: false,
+      });
+      return task.allDay ? `${fmt(start)} ~ ${fmt(deadline)}` : `${fmt(start)} - ${fmt(deadline)}`;
+    }
+    const ts = deadline ?? start;
+  if (ts === undefined) return '';
+  return new Date(ts).toLocaleString('zh-CN', {
+    month: 'numeric', day: 'numeric',
     hour: task.allDay ? undefined : '2-digit',
     minute: task.allDay ? undefined : '2-digit',
     hour12: false,
