@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import packageJson from '../../package.json';
 import type { Task, UpdateTaskInput } from '../types/task';
+import { getTaskDeadline } from '../types/task';
 import { STORAGE_KEYS } from './storageKeys';
 import { taskService } from './taskService';
 
@@ -35,7 +36,6 @@ const createTaskFixture = (overrides: Partial<Task> = {}): Task => ({
 	subtasks: [],
 	createdAt: 100,
 	updatedAt: 200,
-	dueDate: 300,
 	...overrides,
 });
 
@@ -58,9 +58,9 @@ const taskServiceWithBackup = taskService as TaskServiceWithBackup;
 const taskServiceWithArchive = taskService as TaskServiceWithArchive;
 const storageKeysWithBackup = STORAGE_KEYS as StorageKeysWithBackup;
 
-describe('taskService', () => {
-	const dbStorage = new MockDbStorage();
+const dbStorage = new MockDbStorage();
 
+describe('taskService', () => {
 	beforeEach(() => {
 		dbStorage.clear();
 		window.utools = { ...(window.utools ?? {}), dbStorage };
@@ -240,8 +240,10 @@ describe('taskService', () => {
 			updatedAt: existing.updatedAt,
 		});
 
-		expect(updated.dueDate).toBe(existing.dueDate);
-		expect(taskService.getById(existing.id)?.dueDate).toBe(existing.dueDate);
+		expect(updated.dueEnd).toBe(existing.dueDate);
+		expect(updated).not.toHaveProperty('dueDate');
+		expect(taskService.getById(existing.id)?.dueEnd).toBe(existing.dueDate);
+		expect(taskService.getById(existing.id)).not.toHaveProperty('dueDate');
 	});
 
 	it('clears dueDate only when update explicitly sets it to undefined', () => {
@@ -265,7 +267,9 @@ describe('taskService', () => {
 			dueDate: undefined,
 		});
 
+		expect(updated).not.toHaveProperty('dueEnd');
 		expect(updated).not.toHaveProperty('dueDate');
+		expect(taskService.getById(existing.id)).not.toHaveProperty('dueEnd');
 		expect(taskService.getById(existing.id)).not.toHaveProperty('dueDate');
 	});
 
@@ -398,7 +402,7 @@ describe('taskService', () => {
 			priority: 'low',
 			tags: ['personal'],
 			group: 'inbox',
-			dueStart: 10_000,
+			dueEnd: 10_000,
 			allDay: true,
 		});
 	});
@@ -475,7 +479,7 @@ describe('taskService', () => {
 			});
 			expect(tasks.find((task) => task.id !== repeating.id)).toMatchObject({
 				status: 'todo',
-				dueStart: 1_000 + 24 * 60 * 60 * 1_000,
+				dueEnd: 10_000 + 24 * 60 * 60 * 1_000,
 			});
 		});
 
@@ -712,4 +716,69 @@ describe('taskService', () => {
 			expect(taskService.getById(parentB.id)).toMatchObject({ status: 'doing' });
 		});
 	});
+});
+
+describe('unified time range semantics', () => {
+  beforeEach(() => {
+    dbStorage.clear();
+  });
+
+  it('migrates a legacy dueDate-only task to dueEnd on create', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const created = taskService.create({
+      title: '旧单点', status: 'todo', priority: 'medium', tags: [], group: '', description: '', subtasks: [], dueDate: 555,
+    });
+    expect(created).not.toHaveProperty('dueDate');
+    expect(created.dueEnd).toBe(555);
+    expect(getTaskDeadline(created)).toBe(555);
+  });
+
+  it('migrates a single dueStart-only task to dueEnd on create', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const created = taskService.create({
+      title: '旧起点', status: 'todo', priority: 'medium', tags: [], group: '', description: '', subtasks: [], dueStart: 999,
+    });
+    expect(created).not.toHaveProperty('dueStart');
+    expect(created.dueEnd).toBe(999);
+  });
+
+  it('normalizes reversed range on create and keeps interval', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const created = taskService.create({
+      title: '倒序区间', status: 'todo', priority: 'medium', tags: [], group: '', description: '', subtasks: [], dueStart: 300, dueEnd: 100,
+    });
+    expect(created.dueStart).toBe(100);
+    expect(created.dueEnd).toBe(300);
+  });
+
+  it('update preserves existing dueEnd when only dueStart changes', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const task = createTaskFixture({ id: 'range-task', dueStart: 100, dueEnd: 300 });
+    delete (task as Partial<Task>).dueDate;
+    taskService.replaceAll([task]);
+    const updated = taskService.update(task.id, { dueStart: 150 })!;
+    expect(updated.dueStart).toBe(150);
+    expect(updated.dueEnd).toBe(300);
+  });
+
+  it('update swaps endpoints when new start exceeds existing end', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const task = createTaskFixture({ id: 'range-task', dueStart: 100, dueEnd: 300 });
+    delete (task as Partial<Task>).dueDate;
+    taskService.replaceAll([task]);
+    const updated = taskService.update(task.id, { dueStart: 500 })!;
+    expect(updated.dueStart).toBe(300);
+    expect(updated.dueEnd).toBe(500);
+  });
+
+  it('migrates a legacy dueDate task read from storage into dueEnd', () => {
+    dbStorage.setItem(
+      STORAGE_KEYS.TASKS,
+      JSON.stringify([{ id: 'legacy', title: '旧', status: 'todo', priority: 'medium', tags: [], group: '', description: '', subtasks: [], createdAt: 1, updatedAt: 1, dueDate: 4242 }]),
+    );
+    const tasks = taskService.getAll();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).not.toHaveProperty('dueDate');
+    expect(tasks[0]?.dueEnd).toBe(4242);
+  });
 });

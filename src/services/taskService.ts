@@ -9,6 +9,7 @@ import type {
 	TaskStatus,
 	UpdateTaskInput,
 } from '../types/task';
+import { normalizeDateRange } from '../types/task';
 import { buildNextInstance, shouldSpawnNext } from './repeatService';
 import { STORAGE_KEYS } from './storageKeys';
 
@@ -181,12 +182,18 @@ const toTask = (value: unknown): Task | null => {
 		});
 	}
 
+	// 统一时间区间语义：优先 dueEnd；旧单点 dueStart/dueDate 规范化到 dueEnd
+	const normalizedRange = normalizeDateRange(
+		dueStart !== undefined ? dueStart : undefined,
+		dueEnd !== undefined ? dueEnd : (dueDate !== undefined ? dueDate : undefined),
+	);
+
 	return buildTask({
 		id,
 		parentTaskId,
 		title,
 		status,
-		dueDate,
+		dueDate: undefined,
 		priority,
 		tags: normalizedTags,
 		group,
@@ -195,8 +202,8 @@ const toTask = (value: unknown): Task | null => {
 		createdAt,
 		updatedAt,
 		...(completedAt !== undefined ? { completedAt } : {}),
-		...(dueStart !== undefined ? { dueStart } : {}),
-		...(dueEnd !== undefined ? { dueEnd } : {}),
+		...(normalizedRange.dueStart !== undefined ? { dueStart: normalizedRange.dueStart } : {}),
+		...(normalizedRange.dueEnd !== undefined ? { dueEnd: normalizedRange.dueEnd } : {}),
 		...(allDay !== undefined ? { allDay } : {}),
 		...(reminderOffset !== undefined ? { reminderOffset } : {}),
 		...(remindedAt !== undefined ? { remindedAt } : {}),
@@ -364,7 +371,9 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 		: existing?.dueStart;
 	const dueEnd = hasOwn(input, 'dueEnd')
 		? input.dueEnd
-		: existing?.dueEnd;
+		: hasOwn(input, 'dueDate')
+			? undefined
+			: existing?.dueEnd;
 	const allDay = hasOwn(input, 'allDay')
 		? input.allDay
 		: existing?.allDay;
@@ -395,7 +404,7 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 		parentTaskId,
 		title: input.title,
 		status: input.status,
-		dueDate,
+		dueDate: undefined,
 		priority: input.priority,
 		tags: [...input.tags],
 		group: input.group,
@@ -404,8 +413,12 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 		createdAt: existing?.createdAt ?? input.createdAt ?? now,
 		updatedAt: existing ? now : input.updatedAt ?? now,
 	};
-	if (dueStart !== undefined) payload.dueStart = dueStart;
-	if (dueEnd !== undefined) payload.dueEnd = dueEnd;
+	const normalizedSaveRange = normalizeDateRange(
+		dueStart !== undefined ? dueStart : undefined,
+		dueEnd !== undefined ? dueEnd : (dueDate !== undefined ? dueDate : undefined),
+	);
+	if (normalizedSaveRange.dueStart !== undefined) payload.dueStart = normalizedSaveRange.dueStart;
+	if (normalizedSaveRange.dueEnd !== undefined) payload.dueEnd = normalizedSaveRange.dueEnd;
 	if (allDay !== undefined) payload.allDay = allDay;
 	if (completedAt !== undefined) payload.completedAt = completedAt;
 	if (inputHasReminderOffset && input.reminderOffset !== undefined) {
@@ -577,6 +590,27 @@ class TaskService {
 		}
 
 		const current = tasks[index]!;
+		const updatesHasStart = hasOwn(updates, 'dueStart');
+		const updatesHasEnd = hasOwn(updates, 'dueEnd');
+		const updatesHasDate = hasOwn(updates, 'dueDate');
+		let normalizedUpdateRange: { dueStart?: number; dueEnd?: number };
+		if (!updatesHasStart && !updatesHasEnd && !updatesHasDate) {
+			const fallback = normalizeDateRange(
+				current.dueStart !== undefined ? current.dueStart : undefined,
+				current.dueEnd !== undefined ? current.dueEnd : (current.dueDate !== undefined ? current.dueDate : undefined),
+			);
+			normalizedUpdateRange = {
+				...(fallback.dueStart !== undefined ? { dueStart: fallback.dueStart } : {}),
+				...(fallback.dueEnd !== undefined ? { dueEnd: fallback.dueEnd } : {}),
+			};
+		} else {
+			const startSource = updatesHasStart ? updates.dueStart : current.dueStart;
+			const endSource = updatesHasEnd ? updates.dueEnd : (updatesHasDate ? updates.dueDate : current.dueEnd);
+			normalizedUpdateRange = normalizeDateRange(
+				startSource !== undefined ? startSource : undefined,
+				endSource !== undefined ? endSource : undefined,
+			);
+		}
 		const updateInput: SaveTaskInput = {
 			id: current.id,
 			title: updates.title ?? current.title,
@@ -593,21 +627,8 @@ class TaskService {
 				: current.parentTaskId === undefined
 					? {}
 					: { parentTaskId: current.parentTaskId }),
-			...(hasOwn(updates, 'dueDate')
-				? { dueDate: updates.dueDate }
-				: current.dueDate === undefined
-					? {}
-					: { dueDate: current.dueDate }),
-			...(hasOwn(updates, 'dueStart')
-				? { dueStart: updates.dueStart }
-				: current.dueStart === undefined
-					? {}
-					: { dueStart: current.dueStart }),
-			...(hasOwn(updates, 'dueEnd')
-				? { dueEnd: updates.dueEnd }
-				: current.dueEnd === undefined
-					? {}
-					: { dueEnd: current.dueEnd }),
+			...(normalizedUpdateRange.dueStart !== undefined ? { dueStart: normalizedUpdateRange.dueStart } : {}),
+			...(normalizedUpdateRange.dueEnd !== undefined ? { dueEnd: normalizedUpdateRange.dueEnd } : {}),
 			...(hasOwn(updates, 'allDay')
 				? { allDay: updates.allDay }
 				: current.allDay === undefined
