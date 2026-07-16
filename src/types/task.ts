@@ -168,6 +168,32 @@ export const getTaskEnd = (task: Pick<Task, 'dueEnd' | 'dueStart' | 'dueDate'>):
 	return task.dueEnd ?? task.dueStart ?? task.dueDate;
 };
 
+/**
+ * 任务的“截止时间”：单点任务的截止点（提醒/重复基准）；区间任务即右边界。
+ * 优先 dueEnd，回退 dueStart、再回退旧 dueDate。
+ */
+export const getTaskDeadline = (task: Pick<Task, 'dueEnd' | 'dueStart' | 'dueDate'>): number | undefined => {
+	return task.dueEnd ?? task.dueStart ?? task.dueDate;
+};
+
+/**
+ * 将任意两个输入端点归一化为合法任务时间字段：
+ * - 均不存在：返回空对象（不写入字段）。
+ * - 仅一个存在（或两者相等）：作为单点截止，只返回 `dueEnd`。
+ * - 两个不同值：按时间升序返回 `{ dueStart: min, dueEnd: max }`。
+ * 调用方按字段是否存在写入，避免 `exactOptionalPropertyTypes` 误赋 undefined。
+ */
+export const normalizeDateRange = (
+	start: number | undefined,
+	end: number | undefined,
+): { dueStart?: number; dueEnd?: number } => {
+	if (start === undefined && end === undefined) return {};
+	if (start === undefined) return { dueEnd: end as number };
+	if (end === undefined) return { dueEnd: start };
+	if (start === end) return { dueEnd: start };
+	return start < end ? { dueStart: start, dueEnd: end } : { dueStart: end, dueEnd: start };
+};
+
 export interface CountedValue {
 	name: string;
 	count: number;
