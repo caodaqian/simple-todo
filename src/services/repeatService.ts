@@ -1,19 +1,19 @@
 import type { RepeatRule, Task } from '../types/task';
-import { getTaskStart } from '../types/task';
+import { getTaskDeadline } from '../types/task';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const MS_PER_WEEK = 7 * MS_PER_DAY;
 
 /**
- * 按 repeat 规则从基准开始时间（dueStart / 旧 dueDate）计算下一个实例的开始时间。
- * 若基准无，回退到「现在 + interval 天」。
+ * 按 repeat 规则从基准截止时间（dueEnd / dueStart / 旧 dueDate）计算下一个实例的截止时间。
+ * 若基准无，回退到「现在 + interval」。
  */
 export const computeNextDueDate = (task: Task, now: number = Date.now()): number => {
 	const rule = task.repeat;
 	if (!rule) {
 		throw new Error('任务无重复规则');
 	}
-	const base = getTaskStart(task) ?? now;
+	const base = getTaskDeadline(task) ?? now;
 	switch (rule.type) {
 		case 'daily':
 		case 'custom':
@@ -63,7 +63,6 @@ export const buildNextInstance = (task: Task, now: number = Date.now()): Task =>
 	if (!rule) {
 		throw new Error('任务无重复规则');
 	}
-	const nextDueDate = computeNextDueDate(task, now);
 	const nextRepeat: RepeatRule = {
 		...rule,
 		generatedCount: (rule.generatedCount ?? 0) + 1,
@@ -89,19 +88,16 @@ export const buildNextInstance = (task: Task, now: number = Date.now()): Task =>
 	};
 	if (task.parentTaskId !== undefined) next.parentTaskId = task.parentTaskId;
 	if (task.allDay !== undefined) next.allDay = task.allDay;
-	// 推进 dueEnd 以保持与 dueStart 的相对 offset
-	if (task.dueStart !== undefined && task.dueEnd !== undefined) {
-		next.dueEnd = nextDueDate + (task.dueEnd - task.dueStart);
-	}
-	if (task.dueStart !== undefined) {
-		// 新模型：用 dueStart 推进
-		next.dueStart = nextDueDate;
-	} else if (task.dueDate !== undefined) {
-		// 旧模型：保持 dueDate
-		next.dueDate = nextDueDate;
-	} else if (nextDueDate !== undefined) {
-		// 原无 dueStart/dueDate 但有 wrap fallback 推进了时间，挂到 dueStart
-		next.dueStart = nextDueDate;
+	// 以截止时间为基准推进；时间段任务保留起止相对 offset，单点任务仅写 dueEnd。
+	const baseStart = task.dueStart;
+	const baseDeadline = getTaskDeadline(task) ?? now;
+	const nextDeadline = computeNextDueDate(task, now); // baseDeadline + interval
+	if (baseStart !== undefined) {
+		const offset = baseDeadline - baseStart; // 时间段长度
+		next.dueStart = nextDeadline - offset;
+		next.dueEnd = nextDeadline;
+	} else {
+		next.dueEnd = nextDeadline;
 	}
 	if (task.reminderOffset !== undefined) {
 		next.reminderOffset = task.reminderOffset;

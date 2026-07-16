@@ -10,7 +10,7 @@ import type {
 	TaskSortOption,
 	TaskStatus,
 } from '../types/task';
-import { getTaskEnd, getTaskStart } from '../types/task';
+import { getTaskDeadline, getTaskEnd, getTaskStart } from '../types/task';
 
 const PRIORITY_RANK: Record<TaskPriority, number> = {
 	low: 1,
@@ -44,13 +44,13 @@ export const getTaskDateRules = (now = Date.now(), recentDays = 7): TaskDateRule
 const isActiveTask = (task: Task): boolean => task.status !== 'done';
 
 export const isTaskDueToday = (task: Task, rules: TaskDateRules): boolean => {
-	const start = getTaskStart(task);
-	return start !== undefined && start >= rules.startOfToday && start <= rules.endOfToday;
+	const deadline = getTaskDeadline(task);
+	return deadline !== undefined && deadline >= rules.startOfToday && deadline <= rules.endOfToday;
 };
 
 export const isTaskInRecentDays = (task: Task, rules: TaskDateRules): boolean => {
-	const start = getTaskStart(task);
-	return start !== undefined && start >= rules.startOfToday && start <= rules.endOfRecentDays;
+	const deadline = getTaskDeadline(task);
+	return deadline !== undefined && deadline >= rules.startOfToday && deadline <= rules.endOfRecentDays;
 };
 
 export const isTaskOverdue = (task: Task, rules: TaskDateRules): boolean => {
@@ -136,8 +136,8 @@ const matchesTags = (task: Task, tags: string[], mode: TagMatchMode): boolean =>
 };
 
 const compareDueDate = (left: Task, right: Task, order: 'asc' | 'desc'): number => {
-	const leftDueDate = getTaskStart(left);
-	const rightDueDate = getTaskStart(right);
+	const leftDueDate = getTaskDeadline(left);
+	const rightDueDate = getTaskDeadline(right);
 
 	if (leftDueDate === undefined && rightDueDate === undefined) {
 		return 0;

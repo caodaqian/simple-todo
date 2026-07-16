@@ -1,5 +1,6 @@
 import { parseDateFromText } from '../composables/useDateParser';
 import type { Task, TaskPriority, UpdateTaskInput } from '../types/task';
+import { getTaskDeadline } from '../types/task';
 
 export interface SmartOrganizationChange {
 	taskId: string;
@@ -93,10 +94,10 @@ export const suggestTaskOrganization = (task: Task, options: SmartOrganizationOp
 		reasons.push(`补充标签：${metadata.tags.join('、')}`);
 	}
 
-	if (task.dueStart === undefined && task.dueDate === undefined) {
+	if (getTaskDeadline(task) === undefined) {
 		const parsed = parseDateFromText(task.title, options.now);
 		if (parsed.dueStart !== undefined) {
-			patch.dueStart = parsed.allDay ? toDayStart(parsed.dueStart) : parsed.dueStart;
+			patch.dueEnd = parsed.allDay ? toDayStart(parsed.dueStart) : parsed.dueStart;
 			patch.allDay = parsed.allDay ?? false;
 			reasons.push('识别截止日期');
 		}

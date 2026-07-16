@@ -18,7 +18,7 @@ const makeTask = (overrides: { [K in keyof Task]?: Task[K] | undefined } = {}): 
 		reminderOffset: 15,
 		repeat: { type: 'daily', interval: 1, generatedCount: 0 },
 	};
-	const { id, parentTaskId, title, status, priority, tags, group, description, subtasks, createdAt, updatedAt, dueDate, reminderOffset, remindedAt, snoozedUntil, repeat } = overrides as Partial<Task>;
+	const { id, parentTaskId, title, status, priority, tags, group, description, subtasks, createdAt, updatedAt, dueDate, dueStart, dueEnd, reminderOffset, remindedAt, snoozedUntil, repeat } = overrides as Partial<Task>;
 	const result: Task = {
 		id: id ?? base.id,
 		title: title ?? base.title,
@@ -34,10 +34,18 @@ const makeTask = (overrides: { [K in keyof Task]?: Task[K] | undefined } = {}): 
 	if ('parentTaskId' in overrides && parentTaskId !== undefined) {
 		result.parentTaskId = parentTaskId;
 	}
+	if ('dueStart' in overrides) {
+		if (dueStart !== undefined) result.dueStart = dueStart;
+	} else if (base.dueStart !== undefined) {
+		result.dueStart = base.dueStart;
+	}
+	if ('dueEnd' in overrides) {
+		if (dueEnd !== undefined) result.dueEnd = dueEnd;
+	}
 	if ('dueDate' in overrides) {
 		if (dueDate !== undefined) result.dueDate = dueDate;
-	} else {
-		result.dueDate = base.dueDate!;
+	} else if (base.dueDate !== undefined && result.dueStart === undefined && result.dueEnd === undefined) {
+		result.dueDate = base.dueDate;
 	}
 	if ('reminderOffset' in overrides) {
 		if (reminderOffset !== undefined) result.reminderOffset = reminderOffset;
@@ -122,7 +130,8 @@ describe('repeatService', () => {
 			const next = buildNextInstance(t, 2000);
 			expect(next.id).not.toBe(t.id);
 			expect(next.status).toBe('todo');
-			expect(next.dueDate).toBe(t.dueDate! + 86400 * 1000);
+		expect(next.dueEnd).toBe(t.dueDate! + 86400 * 1000);
+		expect(next).not.toHaveProperty('dueDate');
 			expect(next.repeat?.generatedCount).toBe(1);
 			expect(next.reminderOffset).toBe(15);
 			expect(next.remindedAt).toBeUndefined();
@@ -142,6 +151,30 @@ describe('repeatService', () => {
 		});
 		it('throws without repeat', () => {
 			expect(() => buildNextInstance(makeTask({ repeat: undefined }), 2000)).toThrow();
+		});
+	});
+
+	describe('repeats from deadline', () => {
+		it('advances by interval using dueEnd when present', () => {
+			const t = makeTask({
+				status: 'done',
+				dueStart: new Date('2026-07-10T09:00:00Z').getTime(),
+				dueEnd: new Date('2026-07-10T11:00:00Z').getTime(),
+				repeat: { type: 'daily', interval: 1 },
+			});
+			const next = buildNextInstance(t, 2000);
+			expect(next.dueStart).toBe(new Date('2026-07-11T09:00:00Z').getTime());
+			expect(next.dueEnd).toBe(new Date('2026-07-11T11:00:00Z').getTime());
+		});
+		it('uses dueDate when dueEnd and dueStart are missing', () => {
+			const t = makeTask({
+				status: 'done',
+				dueDate: new Date('2026-07-10T09:00:00Z').getTime(),
+				repeat: { type: 'daily', interval: 1 },
+			});
+			const next = buildNextInstance(t, 2000);
+			expect(next.dueEnd).toBe(new Date('2026-07-11T09:00:00Z').getTime());
+			expect(next).not.toHaveProperty('dueDate');
 		});
 	});
 });

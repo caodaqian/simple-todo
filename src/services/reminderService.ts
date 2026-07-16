@@ -1,18 +1,18 @@
 import type { Task } from '../types/task';
-import { getTaskStart } from '../types/task';
+import { getTaskDeadline } from '../types/task';
 
 const MS_PER_MINUTE = 60 * 1000;
 
 /**
  * 计算任务的提醒触发时间戳。
- * reminderAt = dueDate - (reminderOffset ?? 0) * 60000
- * 若无 dueDate 则返回 undefined（无提醒）。
+ * reminderAt = deadline - (reminderOffset ?? 0) * 60000
+ * 若无截止时间则返回 undefined（无提醒）。
  */
 export const computeReminderAt = (task: Task): number | undefined => {
-	const start = getTaskStart(task);
-	if (start === undefined) return undefined;
+	const deadline = getTaskDeadline(task);
+	if (deadline === undefined) return undefined;
 	const offset = task.reminderOffset ?? 0;
-	return start - offset * MS_PER_MINUTE;
+	return deadline - offset * MS_PER_MINUTE;
 };
 
 /**
@@ -51,9 +51,9 @@ export const getDueReminders = (tasks: Task[], now: number = Date.now()): Task[]
  */
 export const isOverdueUnreminded = (task: Task, now: number = Date.now()): boolean => {
 	if (task.status === 'done') return false;
-	const start = getTaskStart(task);
-	if (start === undefined) return false;
-	if (start > now) return false;
+	const deadline = getTaskDeadline(task);
+	if (deadline === undefined) return false;
+	if (deadline > now) return false;
 	if (task.remindedAt !== undefined) return false;
 	if (task.snoozedUntil !== undefined && task.snoozedUntil > now) return false;
 	return true;
@@ -66,7 +66,7 @@ export const isOverdueUnreminded = (task: Task, now: number = Date.now()): boole
 export const getOverdueReminders = (tasks: Task[], now: number = Date.now()): Task[] => {
 	return tasks
 		.filter((task) => isOverdueUnreminded(task, now))
-		.sort((a, b) => (getTaskStart(a) ?? Infinity) - (getTaskStart(b) ?? Infinity));
+		.sort((a, b) => (getTaskDeadline(a) ?? Infinity) - (getTaskDeadline(b) ?? Infinity));
 };
 
 /**
@@ -85,7 +85,7 @@ export const getMissedReminders = (tasks: Task[], now: number = Date.now()): Tas
 	}
 	return merged.sort(
 		(a, b) =>
-			(getTaskStart(a) ?? computeReminderAt(a) ?? Infinity) -
-			(getTaskStart(b) ?? computeReminderAt(b) ?? Infinity),
+			(getTaskDeadline(a) ?? computeReminderAt(a) ?? Infinity) -
+			(getTaskDeadline(b) ?? computeReminderAt(b) ?? Infinity),
 	);
 };

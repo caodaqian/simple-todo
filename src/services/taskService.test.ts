@@ -479,8 +479,9 @@ describe('taskService', () => {
 			});
 			expect(tasks.find((task) => task.id !== repeating.id)).toMatchObject({
 				status: 'todo',
-				dueEnd: 10_000 + 24 * 60 * 60 * 1_000,
+				dueEnd: 1_000 + 24 * 60 * 60 * 1_000,
 			});
+			expect(tasks.find((task) => task.id !== repeating.id)).not.toHaveProperty('dueStart');
 		});
 
 		it('updates only matched ids and refreshes updatedAt', () => {

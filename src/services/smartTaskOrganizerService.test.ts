@@ -34,7 +34,8 @@ describe('smartTaskOrganizerService', () => {
 				allDay: true,
 			},
 		});
-		expect(plan.changes[0]!.patch.dueStart).toBe(new Date('2026-07-08T00:00:00+08:00').getTime());
+		expect(plan.changes[0]!.patch.dueEnd).toBe(new Date('2026-07-08T00:00:00+08:00').getTime());
+		expect(plan.changes[0]!.patch).not.toHaveProperty('dueStart');
 		expect(plan.skipped).toBe(1);
 	});
 });

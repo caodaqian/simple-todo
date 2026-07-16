@@ -88,3 +88,27 @@ describe('filter archived tasks', () => {
 		expect(result.map((task) => task.id)).toEqual(['archived']);
 	});
 });
+
+describe('sort by deadline uses getTaskDeadline', () => {
+	it('orders by dueEnd when dueStart missing', () => {
+		const a = createTask({ id: 'a', dueEnd: 500 });
+		const b = createTask({ id: 'b', dueEnd: 100 });
+		const result = searchAndSortTasks([a, b], {}, { field: 'dueDate', order: 'asc' });
+		expect(result.map((t) => t.id)).toEqual(['b', 'a']);
+	});
+	it('range filter overlaps when start beyond rangeStart but deadline before rangeEnd', () => {
+		const rules = getTaskDateRules(new Date('2026-06-22T10:00:00+08:00').getTime(), 7);
+		void rules;
+		const t = createTask({
+			dueStart: new Date('2026-06-22T18:00:00+08:00').getTime(),
+			dueEnd: new Date('2026-06-22T19:30:00+08:00').getTime(),
+		});
+		const inRange = searchAndSortTasks([t], {
+			dateRange: {
+				start: new Date('2026-06-22T19:00:00+08:00').getTime(),
+				end: new Date('2026-06-22T19:15:00+08:00').getTime(),
+			},
+		});
+		expect(inRange.map((task) => task.id)).toEqual(['task-1']);
+	});
+});

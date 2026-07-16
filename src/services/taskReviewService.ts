@@ -1,5 +1,6 @@
 import type { PomodoroSession } from '../types/pomodoro';
 import type { CountedValue, Task, TaskPriority, TaskStatus } from '../types/task';
+import { getTaskDeadline } from '../types/task';
 import { getTaskDateRules, isTaskInRecentDays, isTaskOverdue } from './searchService';
 
 export interface TrendPoint {
@@ -92,7 +93,7 @@ export const buildTaskReview = ({ tasks, pomodoros = [], now = Date.now() }: Bui
 	for (const task of visibleTasks) {
 		byStatus[task.status] += 1;
 		byPriority[task.priority] += 1;
-		if (task.dueStart === undefined && task.dueDate === undefined) {
+		if (getTaskDeadline(task) === undefined) {
 			noDueDate += 1;
 		}
 		if (isTaskOverdue(task, rules)) {
