@@ -7,7 +7,7 @@ import { notify } from '../services/notifyService';
 import { taskService, type AddSubtaskOverrides } from '../services/taskService';
 import { templateService, type CreateTemplateInput } from '../services/templateService';
 import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
-import { getTaskEnd, getTaskStart } from '../types/task';
+import { getTaskDeadline, getTaskStart, normalizeDateRange } from '../types/task';
 import AppIcon from './AppIcon.vue';
 import PomodoroStartButton from './PomodoroStartButton.vue';
 import SmartTaskInput from './SmartTaskInput.vue';
@@ -268,29 +268,28 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
 
   // 截止时间摘要展示在 hero
   const dueSummary = computed<string>(() => {
-    if (!form.value.hasDue || !form.value.startDate) return '';
-    const startTs = dateInputToTimestamp(form.value.startDate, form.value.allDay ? undefined : form.value.startTime);
-    if (Number.isNaN(startTs)) return '';
-    const dateStr = new Date(startTs).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+    if (!form.value.hasDue || !form.value.endDate) return '';
+    const endTs = dateInputToTimestamp(form.value.endDate, form.value.allDay ? undefined : form.value.endTime);
+    if (Number.isNaN(endTs)) return '';
+    const endDateStr = new Date(endTs).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
     if (form.value.allDay) {
-      if (form.value.hasEndDate && form.value.endDate) {
-        const endTs = dateInputToTimestamp(form.value.endDate);
-        if (!Number.isNaN(endTs)) {
-          const endStr = new Date(endTs).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
-          return `${dateStr} ~ ${endStr} 全天`;
+      if (form.value.hasEndDate && form.value.startDate) {
+        const startTs = dateInputToTimestamp(form.value.startDate);
+        if (!Number.isNaN(startTs)) {
+          const startStr = new Date(startTs).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+          return `${startStr} ~ ${endDateStr} 全天`;
         }
       }
-      return `${dateStr} 全天`;
+      return `${endDateStr} 全天`;
     }
-    const timeStr = form.value.startTime;
-    if (form.value.hasEndDate && form.value.endDate) {
-      const endTs = dateInputToTimestamp(form.value.endDate, form.value.endTime);
-      if (!Number.isNaN(endTs)) {
-        const endDateStr = new Date(endTs).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
-        return `${dateStr} ${timeStr} ~ ${endDateStr} ${form.value.endTime}`;
+    if (form.value.hasEndDate && form.value.startDate) {
+      const startTs = dateInputToTimestamp(form.value.startDate, form.value.startTime);
+      if (!Number.isNaN(startTs)) {
+        const startStr = new Date(startTs).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+        return `${startStr} ${form.value.startTime} ~ ${endDateStr} ${form.value.endTime}`;
       }
     }
-    return `${dateStr} ${timeStr}`;
+    return `${endDateStr} ${form.value.endTime}`;
   });
 
   const statusLabel = (status: TaskStatus): string =>
@@ -382,6 +381,32 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
         // 全天 → 非全天：补默认起点时间
         if (!form.value.startTime) form.value.startTime = '09:00';
         if (form.value.hasEndDate && !form.value.endTime) form.value.endTime = '10:00';
+      }
+    },
+  );
+
+  // 切换区间模式时，自动填充 startDate/startTime 或清空之
+  watch(
+    () => form.value.hasEndDate,
+    (now, prev) => {
+      if (now === prev) return;
+      if (now) {
+        if (!form.value.startDate) {
+          const endTs = form.value.endDate
+            ? dateInputToTimestamp(form.value.endDate, form.value.allDay ? undefined : form.value.endTime)
+            : Number.NaN;
+          if (!Number.isNaN(endTs)) {
+            const d = new Date(endTs);
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            form.value.startDate = `${yyyy}-${mm}-${dd}`;
+            form.value.startTime = form.value.startTime || '09:00';
+          }
+        }
+      } else {
+        form.value.startDate = '';
+        form.value.startTime = '09:00';
       }
     },
   );
@@ -534,10 +559,10 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
     if (task) {
       parentTask.value = taskService.getParentTask(task);
       const start = getTaskStart(task);
-      const end = getTaskEnd(task);
-      const hasDue = start !== undefined;
+      const deadline = getTaskDeadline(task);
+      const hasDue = deadline !== undefined;
       const allDay = task.allDay === true;
-      const hasEnd = end !== undefined && end !== start;
+      const hasEnd = start !== undefined && deadline !== undefined && start !== deadline;
       const repeat = task.repeat;
       form.value = {
         title: task.title,
@@ -550,8 +575,8 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
         startDate: start !== undefined ? formatDateInput(start) : '',
         startTime: start !== undefined && !allDay ? formatTimeInput(start) : '09:00',
         hasEndDate: hasEnd,
-        endDate: hasEnd && end !== undefined ? formatDateInput(end) : '',
-        endTime: hasEnd && end !== undefined ? formatTimeInput(end) : '10:00',
+        endDate: deadline !== undefined ? formatDateInput(deadline) : '',
+        endTime: deadline !== undefined && !allDay ? formatTimeInput(deadline) : '10:00',
         description: task.description,
         reminderOffset: task.reminderOffset !== undefined ? task.reminderOffset : null,
         repeatType: repeat ? repeat.type : '',
@@ -565,7 +590,7 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
       if (props.initialDueDate) {
         form.value.hasDue = true;
         form.value.allDay = true;
-        form.value.startDate = props.initialDueDate;
+        form.value.endDate = props.initialDueDate;
       }
       subtasks.value = [];
     }
@@ -720,20 +745,23 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
     const title = f.title.trim();
     const task = currentTask.value;
 
-    // 仅当 hasDue 设为 true 才写入截止时间；false 时显式置空
+    // 仅当 hasDue 设为 true 才写入截止时间；false 时不写入字段
     let dueStart: number | undefined;
     let dueEnd: number | undefined;
     let allDayFlag: boolean | undefined;
-    if (f.hasDue && f.startDate) {
-      dueStart = dateInputToTimestamp(f.startDate, f.allDay ? undefined : f.startTime);
-      if (Number.isNaN(dueStart)) dueStart = undefined;
+    if (f.hasDue && f.endDate) {
       allDayFlag = f.allDay;
-      if (f.hasEndDate && f.endDate) {
-        const endTs = dateInputToTimestamp(f.endDate, f.allDay ? undefined : f.endTime);
-        if (!Number.isNaN(endTs) && endTs !== dueStart) {
-          dueEnd = endTs;
+      const endTs = dateInputToTimestamp(f.endDate, f.allDay ? undefined : f.endTime);
+      dueEnd = Number.isNaN(endTs) ? undefined : endTs;
+      if (f.hasEndDate && f.startDate) {
+        const startTs = dateInputToTimestamp(f.startDate, f.allDay ? undefined : f.startTime);
+        if (!Number.isNaN(startTs)) {
+          dueStart = startTs;
         }
       }
+      const normalized = normalizeDateRange(dueStart, dueEnd);
+      dueStart = normalized.dueStart;
+      dueEnd = normalized.dueEnd;
     }
 
     let repeatRule: RepeatRule | undefined;
@@ -755,9 +783,9 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
       group: f.group.trim(),
       tags: [...f.tags],
       description: f.description,
-      dueStart,
-      dueEnd,
-      allDay: allDayFlag,
+      ...(dueStart !== undefined ? { dueStart } : {}),
+      ...(dueEnd !== undefined ? { dueEnd } : {}),
+      ...(allDayFlag !== undefined ? { allDay: allDayFlag } : {}),
     };
     if (f.reminderOffset !== null && f.reminderOffset >= 0) {
       payload.reminderOffset = f.reminderOffset;
@@ -880,8 +908,17 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
   };
 
   const addDue = (): void => {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
     form.value.hasDue = true;
     form.value.allDay = true;
+    form.value.hasEndDate = false;
+    form.value.startDate = '';
+    form.value.startTime = '09:00';
+    form.value.endDate = `${yyyy}-${mm}-${dd}`;
+    form.value.endTime = '10:00';
   };
 </script>
 
@@ -1080,12 +1117,12 @@ id="task-tag-input"
                   <div class="due-field" :class="{ 'is-all-day': form.allDay }">
                     <AppIcon name="calendarClock" :size="14" class="due-field-icon" />
                     <input
-                      :key="form.allDay ? 'start-date' : 'start-dt'"
+                      :key="form.allDay ? 'end-date' : 'end-dt'"
                       :type="form.allDay ? 'date' : 'datetime-local'"
-                      :value="startInputValue"
+                      :value="endInputValue"
                       class="due-input"
-                      aria-label="起始时间"
-                      @input="startInputValue = ($event.target as HTMLInputElement).value"
+                      aria-label="结束时间"
+                      @input="endInputValue = ($event.target as HTMLInputElement).value"
                     />
                   </div>
                   <button
@@ -1101,12 +1138,12 @@ id="task-tag-input"
                   <div class="due-field">
                     <AppIcon name="calendarClock" :size="14" class="due-field-icon" />
                     <input
-                      :key="form.allDay ? 'end-date' : 'end-dt'"
+                      :key="form.allDay ? 'start-date' : 'start-dt'"
                       :type="form.allDay ? 'date' : 'datetime-local'"
-                      :value="endInputValue"
+                      :value="startInputValue"
                       class="due-input"
-                      aria-label="结束时间"
-                      @input="endInputValue = ($event.target as HTMLInputElement).value"
+                      aria-label="开始时间"
+                      @input="startInputValue = ($event.target as HTMLInputElement).value"
                     />
                   </div>
                 </div>
