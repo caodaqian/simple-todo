@@ -218,7 +218,7 @@ function applyTaskSchedule(task, params) {
 			nextEnd = e; // undefined 时即清除
 		}
 	} else {
-		nextEnd = task.dueEnd;
+		nextEnd = task.dueEnd !== undefined ? task.dueEnd : task.dueDate;
 	}
 
 	// 清空旧字段后归一化重写，使倒序自动升序、单点只保留 dueEnd、清除时整体清空
@@ -615,8 +615,9 @@ function searchTasksHandler(dbStorage, params) {
 	if (hasDateFilter) {
 		const includeNoDue = p.include_no_due === true;
 		tasks = tasks.filter(function (t) {
-			const start = getTaskStart(t);
-			const end = getTaskEnd(t);
+			const deadline = getTaskDeadline(t);
+			const start = getTaskStart(t) !== undefined ? getTaskStart(t) : deadline;
+			const end = getTaskEnd(t) !== undefined ? getTaskEnd(t) : deadline;
 			if (start === undefined) return includeNoDue;
 			if (dueAfter !== undefined && (end === undefined || end < dueAfter)) return false;
 			if (dueBefore !== undefined && start > dueBefore) return false;

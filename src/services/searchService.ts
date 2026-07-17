@@ -80,9 +80,10 @@ const normalizePriorities = (priority?: TaskPriority | TaskPriority[]): Set<Task
 };
 
 const isInDateRange = (task: Task, range: TaskDateRange): boolean => {
-	const taskStart = getTaskStart(task);
-	const taskEnd = getTaskEnd(task);
-	if (taskStart === undefined) {
+	const deadline = getTaskDeadline(task);
+	const taskStart = getTaskStart(task) ?? deadline;
+	const taskEnd = getTaskEnd(task) ?? deadline;
+	if (taskStart === undefined || taskEnd === undefined) {
 		return false;
 	}
 
@@ -90,13 +91,12 @@ const isInDateRange = (task: Task, range: TaskDateRange): boolean => {
 	const rangeEnd = range.end;
 
 	// 区间交集：task [start, end] 与 [rangeStart, rangeEnd] 有重叠
-	const end = taskEnd ?? taskStart;
 	if (rangeStart !== undefined && rangeEnd !== undefined) {
 		const min = Math.min(rangeStart, rangeEnd);
 		const max = Math.max(rangeStart, rangeEnd);
-		return end >= min && taskStart <= max;
+		return taskEnd >= min && taskStart <= max;
 	}
-	if (rangeStart !== undefined && end < rangeStart) {
+	if (rangeStart !== undefined && taskEnd < rangeStart) {
 		return false;
 	}
 	if (rangeEnd !== undefined && taskStart > rangeEnd) {

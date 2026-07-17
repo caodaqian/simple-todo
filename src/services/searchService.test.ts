@@ -111,4 +111,13 @@ describe('sort by deadline uses getTaskDeadline', () => {
 		});
 		expect(inRange.map((task) => task.id)).toEqual(['task-1']);
 	});
+
+	it('includes a dueEnd-only deadline in its matching date range', () => {
+		const dueEnd = new Date('2026-06-22T19:00:00+08:00').getTime();
+		const result = searchAndSortTasks([createTask({ dueEnd })], {
+			dateRange: { start: dueEnd - 1, end: dueEnd + 1 },
+		});
+
+		expect(result.map((task) => task.id)).toEqual(['task-1']);
+	});
 });

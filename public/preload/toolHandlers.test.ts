@@ -422,13 +422,13 @@ describe('toolHandlers – pure logic', () => {
 			expect(() => updateTaskHandler(db, { task_id: 'u-invalid', tags: ['ok', 1] })).toThrow('tags 必须为字符串数组');
 		});
 
-it('migrates due_date input into dueEnd (single-point deadline)', () => {
-		seedTask(db, { id: 'u2', title: 't' });
-		updateTaskHandler(db, { task_id: 'u2', due_date: '2026-08-01T09:00:00+08:00' });
-		const stored = db.snapshot() as Array<Record<string, unknown>>;
-		const t = stored.find(x => x.id === 'u2')!;
-		expect(t.dueEnd).toBe(new Date('2026-08-01T09:00:00+08:00').getTime());
-		expect(t).not.toHaveProperty('dueStart');
+		it('migrates due_date input into dueEnd (single-point deadline)', () => {
+			seedTask(db, { id: 'u2', title: 't' });
+			updateTaskHandler(db, { task_id: 'u2', due_date: '2026-08-01T09:00:00+08:00' });
+			const stored = db.snapshot() as Array<Record<string, unknown>>;
+			const t = stored.find(x => x.id === 'u2')!;
+			expect(t.dueEnd).toBe(new Date('2026-08-01T09:00:00+08:00').getTime());
+			expect(t).not.toHaveProperty('dueStart');
 			expect(t).not.toHaveProperty('dueDate');
 		});
 
@@ -438,6 +438,15 @@ it('migrates due_date input into dueEnd (single-point deadline)', () => {
 			const stored = db.snapshot() as Array<Record<string, unknown>>;
 			const t = stored.find(x => x.id === 'u3')!;
 			expect(t).not.toHaveProperty('dueDate');
+		});
+
+		it('migrates a legacy dueDate without clearing it during an unrelated update', () => {
+			seedTask(db, { id: 'legacy-deadline', title: '旧任务', dueDate: 123 });
+			updateTaskHandler(db, { task_id: 'legacy-deadline', title: '新标题' });
+			const task = (db.snapshot() as Array<Record<string, unknown>>).find((item) => item.id === 'legacy-deadline')!;
+			expect(task.dueEnd).toBe(123);
+			expect(task).not.toHaveProperty('dueStart');
+			expect(task).not.toHaveProperty('dueDate');
 		});
 
 		it('sets and clears parent_task_id', () => {
@@ -1450,6 +1459,21 @@ describe('unified MCP task contract', () => {
 		expect(task.dueEnd).toBe(new Date(2026, 7, 10).getTime());
 		expect(task.allDay).toBe(true);
 		expect(task).not.toHaveProperty('dueDate');
+	});
+
+	it('matches a dueEnd-only deadline in a date range', () => {
+		seedTask(db, {
+			id: 'deadline-only',
+			title: '单点截止',
+			dueEnd: new Date('2026-08-08T10:00:00Z').getTime(),
+		});
+
+		const result = handlers.searchTasksHandler(db, {
+			due_after: '2026-08-08T09:00:00Z',
+			due_before: '2026-08-08T11:00:00Z',
+		}) as { tasks: Array<Record<string, unknown>> };
+
+		expect(result.tasks.map((task) => task.id)).toEqual(['deadline-only']);
 	});
 
 	it('rejects a parent cycle through any ancestor', () => {
