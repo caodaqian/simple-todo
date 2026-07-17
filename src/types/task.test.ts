@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from './task';
-import { getTaskDeadline, getTaskEnd, getTaskStart, normalizeDateRange } from './task';
+import { getTaskDeadline, getTaskEnd, normalizeDateRange } from './task';
 
 const base = { id: 't', title: 'T', status: 'todo', priority: 'medium', tags: [], group: '', description: '', subtasks: [], createdAt: 1, updatedAt: 1 } as unknown as Task;
 
