@@ -372,6 +372,33 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
     },
   });
 
+  const normalizeDueRange = (): void => {
+    const f = form.value;
+    if (!f.hasDue || !f.hasEndDate || !f.startDate || !f.endDate) return;
+
+    const start = dateInputToTimestamp(f.startDate, f.allDay ? undefined : f.startTime);
+    const end = dateInputToTimestamp(f.endDate, f.allDay ? undefined : f.endTime);
+    if (Number.isNaN(start) || Number.isNaN(end)) return;
+
+    const normalized = normalizeDateRange(start, end);
+    const normalizedStart = normalized.dueStart ?? normalized.dueEnd;
+    const normalizedEnd = normalized.dueEnd;
+    if (normalizedStart === undefined || normalizedEnd === undefined) return;
+
+    f.startDate = formatDateInput(normalizedStart);
+    f.endDate = formatDateInput(normalizedEnd);
+    if (!f.allDay) {
+      f.startTime = formatTimeInput(normalizedStart);
+      f.endTime = formatTimeInput(normalizedEnd);
+    }
+  };
+
+  const updateDueInput = (boundary: 'start' | 'end', value: string): void => {
+    if (boundary === 'start') startInputValue.value = value;
+    else endInputValue.value = value;
+    normalizeDueRange();
+  };
+
   // 切换全天时同步默认时间值
   watch(
     () => form.value.allDay,
@@ -583,6 +610,7 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
         repeatInterval: repeat ? repeat.interval : 1,
         repeatUntilDate: repeat?.repeatUntil ? formatDateInput(repeat.repeatUntil) : '',
       };
+      normalizeDueRange();
       subtasks.value = task.parentTaskId ? [] : taskService.getChildTasks(task.id);
     } else {
       parentTask.value = null;
@@ -1113,7 +1141,26 @@ id="task-tag-input"
               </button>
 
               <div v-else class="due-editor">
-                <div class="due-row">
+                <div v-if="form.hasEndDate" class="due-range">
+                  <div class="due-row due-range-row">
+                    <span class="due-point-label"><i></i>开始</span>
+                    <div class="due-field" :class="{ 'is-all-day': form.allDay }">
+                      <AppIcon name="calendarClock" :size="14" class="due-field-icon" />
+                      <input
+                        :key="form.allDay ? 'start-date' : 'start-dt'"
+                        :type="form.allDay ? 'date' : 'datetime-local'"
+                        :value="startInputValue"
+                        class="due-input"
+                        aria-label="开始时间"
+                        @input="updateDueInput('start', ($event.target as HTMLInputElement).value)"
+                      />
+                    </div>
+                  </div>
+                  <div class="due-range-connector" aria-hidden="true"><span></span></div>
+                </div>
+
+                <div class="due-row due-range-row due-end-row">
+                  <span class="due-point-label due-end-label"><i></i>截止</span>
                   <div class="due-field" :class="{ 'is-all-day': form.allDay }">
                     <AppIcon name="calendarClock" :size="14" class="due-field-icon" />
                     <input
@@ -1121,8 +1168,8 @@ id="task-tag-input"
                       :type="form.allDay ? 'date' : 'datetime-local'"
                       :value="endInputValue"
                       class="due-input"
-                      aria-label="结束时间"
-                      @input="endInputValue = ($event.target as HTMLInputElement).value"
+                      aria-label="截止时间"
+                      @input="updateDueInput('end', ($event.target as HTMLInputElement).value)"
                     />
                   </div>
                   <button
@@ -1134,24 +1181,10 @@ id="task-tag-input"
                   >全天</button>
                 </div>
 
-                <div v-if="form.hasEndDate" class="due-row">
-                  <div class="due-field">
-                    <AppIcon name="calendarClock" :size="14" class="due-field-icon" />
-                    <input
-                      :key="form.allDay ? 'start-date' : 'start-dt'"
-                      :type="form.allDay ? 'date' : 'datetime-local'"
-                      :value="startInputValue"
-                      class="due-input"
-                      aria-label="开始时间"
-                      @input="startInputValue = ($event.target as HTMLInputElement).value"
-                    />
-                  </div>
-                </div>
-
                 <label class="due-chip-toggle" :class="{ active: form.hasEndDate }">
                   <input type="checkbox" v-model="form.hasEndDate" />
                   <AppIcon name="calendarClock" :size="13" />
-                  <span>时间段</span>
+                  <span>{{ form.hasEndDate ? '时间段' : '设置时间段' }}</span>
                 </label>
               </div>
             </section>
@@ -2021,7 +2054,7 @@ id="task-tag-input"
   .due-editor {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--space-2);
   }
 
   .due-row {
@@ -2029,6 +2062,51 @@ id="task-tag-input"
     align-items: center;
     gap: 6px;
     min-height: 0;
+  }
+
+  .due-range {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .due-range-row {
+    gap: var(--space-2);
+  }
+
+  .due-point-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    width: 40px;
+    flex: 0 0 40px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .due-point-label i {
+    width: 7px;
+    height: 7px;
+    border: 2px solid var(--color-text-muted);
+    border-radius: 50%;
+  }
+
+  .due-end-label {
+    color: var(--color-accent);
+  }
+
+  .due-end-label i {
+    border-color: var(--color-accent);
+    background: var(--color-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+
+  .due-range-connector {
+    height: 8px;
+    margin: -1px 0 -1px 3px;
+    border-left: 1px dashed var(--color-border-default);
   }
 
   .due-field {
