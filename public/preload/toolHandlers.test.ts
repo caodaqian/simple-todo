@@ -201,7 +201,8 @@ describe('toolHandlers – pure logic', () => {
 			expect(stored[0]!.title).toBe('买牛奶');
 			expect(stored[0]!.priority).toBe('high');
 			expect(stored[0]!.tags).toEqual(['生活']);
-			expect(stored[0]!.dueStart).toBe(new Date('2026-06-10T18:00:00+08:00').getTime());
+			expect(stored[0]!.dueEnd).toBe(new Date('2026-06-10T18:00:00+08:00').getTime());
+			expect(stored[0]).not.toHaveProperty('dueStart');
 			expect(stored[0]).not.toHaveProperty('dueDate');
 		});
 
@@ -421,12 +422,13 @@ describe('toolHandlers – pure logic', () => {
 			expect(() => updateTaskHandler(db, { task_id: 'u-invalid', tags: ['ok', 1] })).toThrow('tags 必须为字符串数组');
 		});
 
-		it('migrates due_date input into dueStart', () => {
-			seedTask(db, { id: 'u2', title: 't' });
-			updateTaskHandler(db, { task_id: 'u2', due_date: '2026-08-01T09:00:00+08:00' });
-			const stored = db.snapshot() as Array<Record<string, unknown>>;
-			const t = stored.find(x => x.id === 'u2')!;
-			expect(t.dueStart).toBe(new Date('2026-08-01T09:00:00+08:00').getTime());
+it('migrates due_date input into dueEnd (single-point deadline)', () => {
+		seedTask(db, { id: 'u2', title: 't' });
+		updateTaskHandler(db, { task_id: 'u2', due_date: '2026-08-01T09:00:00+08:00' });
+		const stored = db.snapshot() as Array<Record<string, unknown>>;
+		const t = stored.find(x => x.id === 'u2')!;
+		expect(t.dueEnd).toBe(new Date('2026-08-01T09:00:00+08:00').getTime());
+		expect(t).not.toHaveProperty('dueStart');
 			expect(t).not.toHaveProperty('dueDate');
 		});
 
@@ -1143,7 +1145,8 @@ describe('toolHandlers – pure logic', () => {
 			expect(stored).toHaveLength(2);
 			const next = stored.find(t => t.id !== 'rep1') as Record<string, unknown>;
 			expect(next.status).toBe('todo');
-			expect(next.dueStart).toBe(new Date('2026-07-01T09:00:00Z').getTime() + 24 * 3600 * 1000);
+			expect(next.dueEnd).toBe(new Date('2026-07-01T09:00:00Z').getTime() + 24 * 3600 * 1000);
+			expect(next).not.toHaveProperty('dueStart');
 			expect((next.repeat as Record<string, unknown>).generatedCount).toBe(1);
 		});
 
@@ -1353,7 +1356,7 @@ describe('toolHandlers – pure logic', () => {
 			expect(shouldSpawnNextPure({ ...base, repeat: { type: 'daily', interval: 1, repeatCount: 1, generatedCount: 1 } })).toBe(false);
 		});
 
-		it('buildNextInstancePure migrates legacy dueDate into dueStart and increments generatedCount', () => {
+		it('buildNextInstancePure migrates legacy dueDate into dueEnd and increments generatedCount', () => {
 			const task = {
 				id: 'p', title: 'T', status: 'done', priority: 'high',
 				tags: ['a'], group: 'G', description: 'd', subtasks: [],
@@ -1362,7 +1365,9 @@ describe('toolHandlers – pure logic', () => {
 			};
 			const next = buildNextInstancePure(task, 2000) as Record<string, unknown>;
 			expect(next.status).toBe('todo');
-			expect(next.dueStart).toBe(1000 + 7 * 86400 * 1000);
+			expect(next.dueEnd).toBe(1000 + 7 * 86400 * 1000);
+			expect(next).not.toHaveProperty('dueStart');
+			expect(next).not.toHaveProperty('dueDate');
 			expect((next.repeat as Record<string, unknown>).generatedCount).toBe(1);
 			expect(next.id).not.toBe('p');
 		});
@@ -1472,7 +1477,7 @@ describe('unified MCP task contract', () => {
 		expect((handlers.searchTasksHandler(db, { archived: true }) as { tasks: Array<Record<string, unknown>> }).tasks.map((task) => task.id)).toEqual(['archived']);
 	});
 
-	it('uses dueEnd for overdue overview and dueStart for reminders', () => {
+	it('uses deadline for overdue overview and reminders', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-07-10T12:00:00Z'));
 		seedTask(db, {
@@ -1483,7 +1488,8 @@ describe('unified MCP task contract', () => {
 
 		const overview = handlers.taskOverviewHandler(db) as { overdue: number; dueToday: number };
 		expect(overview).toMatchObject({ overdue: 0, dueToday: 1 });
-		expect((handlers.listDueRemindersHandler(db) as { reminders: Array<Record<string, unknown>> }).reminders.map((task) => task.id)).toEqual(['active-range']);
+		// 提醒基于截止时间 (deadline=13:00Z)，now=12:00Z 时未触发
+		expect((handlers.listDueRemindersHandler(db) as { reminders: Array<Record<string, unknown>> }).reminders).toEqual([]);
 		vi.useRealTimers();
 	});
 
@@ -1499,7 +1505,9 @@ describe('unified MCP task contract', () => {
 		expect(tasks).toHaveLength(2);
 		expect(tasks.find((task) => task.id === 'repeating')).not.toHaveProperty('reminderOffset');
 		expect(tasks.find((task) => task.id === 'repeating')).not.toHaveProperty('repeat');
-		expect(tasks.find((task) => task.id !== 'repeating')!.dueStart).toBe(1_000 + 86_400_000);
+		// 旧单点 dueStart=1000 经重复推进后，下一实例同时写 dueStart 与 dueEnd（保持零时长区间）
+		const next = tasks.find((task) => task.id !== 'repeating')!;
+		expect(next.dueEnd).toBe(1_000 + 86_400_000);
 	});
 
 	it('bulk completion validates values and spawns repeat instances', () => {
@@ -1538,5 +1546,48 @@ describe('unified MCP task contract', () => {
 		const plan = handlers.suggestOrganizationHandler(db) as { changes: Array<{ task_id: string; reasons: string[] }> };
 		expect(plan.changes).toEqual(expect.arrayContaining([expect.objectContaining({ task_id: 'suggest' })]));
 		expect((db.snapshot() as Array<Record<string, unknown>>)[0]!.group).toBe('');
+	});
+
+	it('auto-sorts a reversed datetime range into ascending endpoints', () => {
+		handlers.createTaskHandler(db, {
+			title: '倒序区间',
+			due_start: '2026-07-10T11:00:00Z',
+			due_end: '2026-07-10T09:00:00Z',
+		});
+		const task = (db.snapshot() as Array<Record<string, unknown>>)[0]!;
+		expect(task.dueStart).toBe(new Date('2026-07-10T09:00:00Z').getTime());
+		expect(task.dueEnd).toBe(new Date('2026-07-10T11:00:00Z').getTime());
+	});
+
+	it('treats a single due_end as the deadline and stores no dueStart', () => {
+		handlers.createTaskHandler(db, { title: '单点结束', due_end: '2026-07-10T10:00:00Z' });
+		const task = (db.snapshot() as Array<Record<string, unknown>>)[0]!;
+		expect(task).not.toHaveProperty('dueStart');
+		expect(task.dueEnd).toBe(new Date('2026-07-10T10:00:00Z').getTime());
+	});
+
+	it('treats a single due_start (legacy) as a single-point deadline', () => {
+		handlers.createTaskHandler(db, { title: '旧单点', due_start: '2026-07-10T10:00:00Z' });
+		const task = (db.snapshot() as Array<Record<string, unknown>>)[0]!;
+		expect(task).not.toHaveProperty('dueStart');
+		expect(task.dueEnd).toBe(new Date('2026-07-10T10:00:00Z').getTime());
+	});
+
+	it('update swaps endpoints when new end is earlier than existing start', () => {
+		seedTask(db, { id: 'r', title: 'R', dueStart: 100, dueEnd: 300 });
+		// 现有 dueStart=100、dueEnd=300；调用者改 due_end=50，与 dueStart 形成倒序，自动升序化为 {50, 100}
+		// 既有 dueEnd=300 被新 due_end=50 覆盖（其它字段未提供时不继承）
+		handlers.updateTaskHandler(db, { task_id: 'r', due_end: 50 });
+		const task = (db.snapshot() as Array<Record<string, unknown>>).find(t => t.id === 'r')!;
+		expect(task.dueStart).toBe(50);
+		expect(task.dueEnd).toBe(100);
+	});
+
+	it('update preserves existing dueEnd when only dueStart changes via MCP', () => {
+		seedTask(db, { id: 'r2', title: 'R2', dueStart: 100, dueEnd: 300 });
+		handlers.updateTaskHandler(db, { task_id: 'r2', due_start: 150 });
+		const task = (db.snapshot() as Array<Record<string, unknown>>).find(t => t.id === 'r2')!;
+		expect(task.dueStart).toBe(150);
+		expect(task.dueEnd).toBe(300);
 	});
 });

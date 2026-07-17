@@ -127,13 +127,15 @@ describe('templateService', () => {
 
 		it('overrides title/dueDate/tags/group', () => {
 			const tpl = templateService.create({ name: 'n', title: 'orig', priority: 'low' });
-			const task = templateService.applyTemplate(tpl.id, {
+			const created = templateService.applyTemplate(tpl.id, {
 				title: 'new', dueDate: 9999, tags: ['x'], group: 'Y',
 			});
-			expect(task.title).toBe('new');
-			expect(task.dueDate).toBe(9999);
-			expect(task.tags).toEqual(['x']);
-			expect(task.group).toBe('Y');
+			expect(created.title).toBe('new');
+			expect(created.dueEnd).toBe(9999);
+			expect(created).not.toHaveProperty('dueStart');
+			expect(created).not.toHaveProperty('dueDate');
+			expect(created.tags).toEqual(['x']);
+			expect(created.group).toBe('Y');
 		});
 
 		it('throws on missing template', () => {

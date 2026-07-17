@@ -57,14 +57,14 @@
 							"string",
 							"null"
 						],
-						"description": "可选。时间点或时间段开始；all_day=true 时使用 YYYY-MM-DD，否则使用 ISO 8601；传 null 等同省略。"
+						"description": "可选。时间段开始；all_day=true 时使用 YYYY-MM-DD，否则使用 ISO 8601；传 null 等同省略。单点任务可只传 due_end；若与 due_end 同时存在会按时间升序自动归一化为 [due_start, due_end]。"
 					},
 					"due_end": {
 						"type": [
 							"string",
 							"null"
 						],
-						"description": "可选。时间段结束，格式与 due_start 相同且不得早于 due_start；传 null 等同省略。"
+						"description": "可选。截止/时间段结束；格式与 due_start 相同；传 null 等同省略。若早于 due_start 会自动与 due_start 交换，使截止时间总取较晚值。"
 					},
 					"all_day": {
 						"type": [
@@ -102,7 +102,7 @@
 							"number",
 							"null"
 						],
-						"description": "可选。相对 due_start 提前的非负分钟数；必须同时提供 due_start；传 null 等同省略。"
+						"description": "可选。相对截止时间（due_end 或旧 due_start/due_date）提前的非负分钟数；必须同时提供截止时间；传 null 等同省略。"
 					},
 					"repeat": {
 						"type": [
@@ -385,7 +385,7 @@
 							"string",
 							"null"
 						],
-						"description": "可选。结束时间，不能早于 due_start；传 null 清除结束时间。"
+						"description": "可选。新的截止/结束时间；全天用 YYYY-MM-DD，否则 ISO 8601；传 null 清除结束时间。早于 due_start 会自动与 due_start 交换。"
 					},
 					"all_day": {
 						"type": [
@@ -423,7 +423,7 @@
 							"number",
 							"null"
 						],
-						"description": "可选。相对 due_start 提前的非负分钟数；传 null 清除提醒。"
+						"description": "可选。相对截止时间（due_end 或旧 due_start/due_date）提前的非负分钟数；传 null 清除提醒。"
 					},
 					"repeat": {
 						"type": [
@@ -832,7 +832,7 @@
 			}
 		},
 		"todo_apply_template": {
-			"description": "从模板创建一个任务及其扁平子任务。template_id 必填；覆盖字段可省略或传 null（等同使用模板默认值）。全天日期用 YYYY-MM-DD，精确时间用 ISO 8601。",
+			"description": "从模板创建一个任务及其扁平子任务。template_id 必填；覆盖字段可省略或传 null（等同使用模板默认值）。全天日期用 YYYY-MM-DD，精确时间用 ISO 8601；单点截止只需 due_end，时间段 due_start 与 due_end 同时存在时自动按时间升序归一化。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -870,14 +870,14 @@
 							"string",
 							"null"
 						],
-						"description": "可选。计划开始；all_day=true 时 YYYY-MM-DD，否则 ISO 8601；null 表示不设置时间。"
+						"description": "可选。计划开始；all_day=true 时 YYYY-MM-DD，否则 ISO 8601；null 表示不设置时间。单点任务只需 due_end；与 due_end 同时存在时自动按时间升序归一化。"
 					},
 					"due_end": {
 						"type": [
 							"string",
 							"null"
 						],
-						"description": "可选。计划结束，格式与 due_start 相同且不得早于开始；null 等同不设置。"
+						"description": "可选。计划结束（截止时间）；格式与 due_start 相同；早于 due_start 时自动交换；null 等同不设置。"
 					},
 					"all_day": {
 						"type": [

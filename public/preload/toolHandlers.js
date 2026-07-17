@@ -100,6 +100,27 @@ function getTaskEnd(task) {
 	return task.dueEnd !== undefined ? task.dueEnd : getTaskStart(task);
 }
 
+// 单点截止时间：优先 dueEnd；回退 dueStart；再回退旧 dueDate。
+// All consumers that need the “截止时间” should use this instead of getTaskStart.
+function getTaskDeadline(task) {
+	return task.dueEnd !== undefined
+		? task.dueEnd
+		: (task.dueStart !== undefined ? task.dueStart : task.dueDate);
+}
+
+// 将任意两个端点归一化为合法任务时间字段：
+//   - 都为空：返回 {}（不写入字段）
+//   - 仅一个有值（或两者相等）：作为单点截止，只返回 dueEnd
+//   - 两个不同值：按时间升序返回 {dueStart: min, dueEnd: max}
+// 调用方按字段是否存在再写入对象，避免 dueStart: undefined 这类副作用。
+function normalizeDateRange(start, end) {
+	if (start === undefined && end === undefined) return {};
+	if (start === undefined) return { dueEnd: end };
+	if (end === undefined) return { dueEnd: start };
+	if (start === end) return { dueEnd: start };
+	return start < end ? { dueStart: start, dueEnd: end } : { dueStart: end, dueEnd: start };
+}
+
 function toTaskListOutput(t, subtasks) {
 	return {
 		id: t.id,
@@ -107,9 +128,9 @@ function toTaskListOutput(t, subtasks) {
 		status: t.status,
 		priority: t.priority,
 		due_start: formatDate(getTaskStart(t)),
-		due_end: formatDate(t.dueEnd),
+		due_end: formatDate(getTaskDeadline(t)),
 		all_day: t.allDay === true,
-		due_date: formatDate(getTaskStart(t)),
+		due_date: formatDate(getTaskDeadline(t)),
 		tags: t.tags || [],
 		group: t.group || '',
 		description: t.description || '',
@@ -126,7 +147,7 @@ function toChildOutput(t) {
 		status: t.status,
 		priority: t.priority,
 		due_start: formatDate(getTaskStart(t)),
-		due_end: formatDate(t.dueEnd),
+		due_end: formatDate(getTaskDeadline(t)),
 		all_day: t.allDay === true,
 	};
 }
@@ -158,35 +179,57 @@ function applyTaskSchedule(task, params) {
 	const hasStart = hasOwn(params, 'due_start');
 	const hasEnd = hasOwn(params, 'due_end');
 	const hasAllDay = hasOwn(params, 'all_day');
+	const hasDate = hasOwn(params, 'due_date');
 	const allDay = hasAllDay ? params.all_day === true : task.allDay === true;
 	if (hasAllDay && typeof params.all_day !== 'boolean' && params.all_day !== null) {
 		throw new Error('all_day 必须是布尔值或 null');
-	}
-	if (hasStart) {
-		if (params.due_start === null) delete task.dueStart;
-		else {
-			const start = parseTaskTime(params.due_start, allDay);
-			if (start === undefined) throw new Error('due_start 不是合法日期');
-			task.dueStart = start;
-		}
-	}
-	if (hasEnd) {
-		if (params.due_end === null) delete task.dueEnd;
-		else {
-			const end = parseTaskTime(params.due_end, allDay);
-			if (end === undefined) throw new Error('due_end 不是合法日期');
-			task.dueEnd = end;
-		}
 	}
 	if (hasAllDay) {
 		if (params.all_day === null) delete task.allDay;
 		else task.allDay = params.all_day;
 	}
-	if ((hasStart || hasEnd || hasAllDay) && task.dueEnd !== undefined && getTaskStart(task) !== undefined && task.dueEnd < getTaskStart(task)) {
-		throw new Error('due_end 不能早于 due_start');
+
+	// 收集用户期望的新端点；null 视为清除对应字段
+	let nextStart;
+	let nextEnd;
+	if (hasStart) {
+		if (params.due_start === null) nextStart = undefined;
+		else {
+			const s = parseTaskTime(params.due_start, allDay);
+			if (s === undefined) throw new Error('due_start 不是合法日期');
+			nextStart = s;
+		}
+	} else {
+		nextStart = task.dueStart;
 	}
-	if (hasStart || hasEnd || hasAllDay) {
-		delete task.dueDate;
+	if (hasEnd) {
+		if (params.due_end === null) nextEnd = undefined;
+		else {
+			const e = parseTaskTime(params.due_end, allDay);
+			if (e === undefined) throw new Error('due_end 不是合法日期');
+			nextEnd = e;
+		}
+	} else if (hasDate) {
+		// 旧 due_date 解释为单点截止时间，归并到 dueEnd；解析失败按“清除”处理（保留旧行为）
+		if (params.due_date === null) {
+			nextEnd = undefined;
+		} else {
+			const e = parseDate(params.due_date);
+			nextEnd = e; // undefined 时即清除
+		}
+	} else {
+		nextEnd = task.dueEnd;
+	}
+
+	// 清空旧字段后归一化重写，使倒序自动升序、单点只保留 dueEnd、清除时整体清空
+	delete task.dueStart;
+	delete task.dueEnd;
+	delete task.dueDate;
+	const range = normalizeDateRange(nextStart, nextEnd);
+	if (range.dueStart !== undefined) task.dueStart = range.dueStart;
+	if (range.dueEnd !== undefined) task.dueEnd = range.dueEnd;
+
+	if (hasStart || hasEnd || hasAllDay || hasDate) {
 		delete task.remindedAt;
 	}
 }
@@ -204,13 +247,16 @@ function createTaskHandler(dbStorage, params) {
 	const now = Date.now();
 	const allDay = params.all_day === true;
 	if (params.all_day !== undefined && typeof params.all_day !== 'boolean') throw new Error('all_day 必须是布尔值');
-	const dueStart = params.due_start !== undefined ? parseTaskTime(params.due_start, allDay) : parseDate(params.due_date);
-	const dueEnd = params.due_end !== undefined ? parseTaskTime(params.due_end, allDay) : undefined;
-	if (params.due_start !== undefined && dueStart === undefined) throw new Error('due_start 不是合法日期');
-	if (params.due_end !== undefined && dueEnd === undefined) throw new Error('due_end 不是合法日期');
-	if (dueEnd !== undefined && dueStart !== undefined && dueEnd < dueStart) throw new Error('due_end 不能早于 due_start');
+	// 单点截止优先 due_end；旧 due_date 兼容并解释为单点截止；与 due_start 同时存在时自动按升序归一化
+	const parsedStart = params.due_start !== undefined ? parseTaskTime(params.due_start, allDay) : undefined;
+	const parsedEnd = params.due_end !== undefined ? parseTaskTime(params.due_end, allDay) : parseDate(params.due_date);
+	if (params.due_start !== undefined && parsedStart === undefined) throw new Error('due_start 不是合法日期');
+	if (params.due_end !== undefined && parsedEnd === undefined) throw new Error('due_end 不是合法日期');
+	const range = normalizeDateRange(parsedStart, parsedEnd);
+	const dueStart = range.dueStart;
+	const dueEnd = range.dueEnd;
 	const reminderOffset = normalizeReminderOffset(params.reminder_offset);
-	if (reminderOffset !== undefined && dueStart === undefined) {
+	if (reminderOffset !== undefined && dueStart === undefined && dueEnd === undefined) {
 		throw new Error('设置提醒需要先有截止日期');
 	}
 	const repeat = normalizeRepeatRule(params.repeat);
@@ -346,21 +392,10 @@ function updateTaskHandler(dbStorage, params) {
 		if (parentTaskId === undefined) delete task.parentTaskId;
 		else task.parentTaskId = parentTaskId;
 	}
-	if (params.due_date !== undefined && !hasOwn(params, 'due_start')) {
-		const parsed = parseDate(params.due_date);
-		if (parsed !== undefined) {
-			task.dueStart = parsed;
-			delete task.dueDate;
-		} else {
-			delete task.dueStart;
-			delete task.dueDate;
-		}
-		delete task.remindedAt;
-	}
 	applyTaskSchedule(task, params);
 	if (hasOwn(params, 'reminder_offset')) {
 		const offset = normalizeReminderOffset(params.reminder_offset);
-		if (offset !== undefined && getTaskStart(task) === undefined) {
+		if (offset !== undefined && getTaskDeadline(task) === undefined) {
 			throw new Error('设置提醒需要先有截止日期');
 		}
 		if (offset === undefined) {
@@ -600,8 +635,8 @@ function searchTasksHandler(dbStorage, params) {
 			av = priorityRank[a.priority] || 0;
 			bv = priorityRank[b.priority] || 0;
 		} else if (sortBy === 'dueDate') {
-			av = getTaskStart(a) === undefined ? Infinity : getTaskStart(a);
-			bv = getTaskStart(b) === undefined ? Infinity : getTaskStart(b);
+			av = getTaskDeadline(a) === undefined ? Infinity : getTaskDeadline(a);
+			bv = getTaskDeadline(b) === undefined ? Infinity : getTaskDeadline(b);
 		}
 		if (av === bv) return 0;
 		return order === 'asc' ? (av < bv ? -1 : 1) : (av > bv ? -1 : 1);
@@ -655,13 +690,12 @@ function taskOverviewHandler(dbStorage, params) {
 	tasks.forEach(function (t) {
 		if (byStatus[t.status] !== undefined) byStatus[t.status]++;
 		if (byPriority[t.priority] !== undefined) byPriority[t.priority]++;
-		const start = getTaskStart(t);
-		const end = getTaskEnd(t);
-		if (start === undefined) {
+		const deadline = getTaskDeadline(t);
+		if (deadline === undefined) {
 			noDueDate++;
 		} else {
-			if (start >= todayStart && start <= todayEnd) dueToday++;
-			if (end < todayStart && t.status !== 'done') overdue++;
+			if (deadline >= todayStart && deadline <= todayEnd) dueToday++;
+			if (deadline < todayStart && t.status !== 'done') overdue++;
 		}
 	});
 
@@ -778,9 +812,9 @@ function getTaskHandler(dbStorage, params) {
 		status: task.status,
 		priority: task.priority,
 		due_start: formatDate(getTaskStart(task)),
-		due_end: formatDate(task.dueEnd),
+		due_end: formatDate(getTaskDeadline(task)),
 		all_day: task.allDay === true,
-		due_date: formatDate(getTaskStart(task)),
+		due_date: formatDate(getTaskDeadline(task)),
 		tags: task.tags || [],
 		group: task.group || '',
 		description: task.description || '',
@@ -958,7 +992,7 @@ function normalizeRepeatRule(value) {
 function computeNextDueDate(task, now) {
 	const rule = task.repeat;
 	if (!rule) throw new Error('任务无重复规则');
-	const base = getTaskStart(task) !== undefined ? getTaskStart(task) : (now || Date.now());
+	const base = getTaskDeadline(task) !== undefined ? getTaskDeadline(task) : (now || Date.now());
 	switch (rule.type) {
 		case 'daily':
 		case 'custom':
@@ -1021,11 +1055,15 @@ function buildNextInstancePure(task, now) {
 	};
 	if (task.parentTaskId !== undefined) next.parentTaskId = task.parentTaskId;
 	if (task.allDay !== undefined) next.allDay = task.allDay;
-	if (task.dueStart !== undefined) {
-		next.dueStart = nextDue;
-		if (task.dueEnd !== undefined) next.dueEnd = nextDue + (task.dueEnd - task.dueStart);
-	} else if (task.dueDate !== undefined) {
-		next.dueStart = nextDue;
+	// 时间区间：保持相对跨度；单点：只写 dueEnd。旧 dueDate 被吸收到 dueEnd，不再写 dueDate 字段。
+	const baseStart = task.dueStart;
+	const baseDeadline = getTaskDeadline(task) !== undefined ? getTaskDeadline(task) : ts;
+	if (baseStart !== undefined) {
+		const offset = baseDeadline - baseStart;
+		next.dueStart = nextDue - offset;
+		next.dueEnd = nextDue;
+	} else {
+		next.dueEnd = nextDue;
 	}
 	if (task.reminderOffset !== undefined) next.reminderOffset = task.reminderOffset;
 	return next;
@@ -1179,11 +1217,14 @@ function applyTemplateHandler(dbStorage, params) {
 	const tags = Array.isArray(params.tags) ? params.tags : (tpl.tags || []).slice();
 	const group = (params.group && typeof params.group === 'string') ? params.group.trim() : (tpl.group || '');
 	const allDay = params.all_day === true;
-	const dueStart = params.due_start !== undefined ? parseTaskTime(params.due_start, allDay) : parseDate(params.due_date);
-	const dueEnd = params.due_end !== undefined ? parseTaskTime(params.due_end, allDay) : undefined;
-	if (params.due_start !== undefined && dueStart === undefined) throw new Error('due_start 不是合法日期');
-	if (params.due_end !== undefined && dueEnd === undefined) throw new Error('due_end 不是合法日期');
-	if (dueEnd !== undefined && dueStart !== undefined && dueEnd < dueStart) throw new Error('due_end 不能早于 due_start');
+	// 单点截止优先 due_end；旧 due_date 兼容并解释为单点截止；与 due_start 同时存在时自动按升序归一化
+	const parsedStart = params.due_start !== undefined ? parseTaskTime(params.due_start, allDay) : undefined;
+	const parsedEnd = params.due_end !== undefined ? parseTaskTime(params.due_end, allDay) : parseDate(params.due_date);
+	if (params.due_start !== undefined && parsedStart === undefined) throw new Error('due_start 不是合法日期');
+	if (params.due_end !== undefined && parsedEnd === undefined) throw new Error('due_end 不是合法日期');
+	const range = normalizeDateRange(parsedStart, parsedEnd);
+	const dueStart = range.dueStart;
+	const dueEnd = range.dueEnd;
 
 	const now = Date.now();
 	const task = {
@@ -1230,7 +1271,7 @@ function setReminderHandler(dbStorage, params) {
 	const tasks = readTasksFromDb(dbStorage);
 	const task = findTaskById(tasks, taskId);
 	if (!task) throw new Error('未找到任务: ' + taskId);
-	if (getTaskStart(task) === undefined) throw new Error('设置提醒需要先有截止日期');
+	if (getTaskDeadline(task) === undefined) throw new Error('设置提醒需要先有截止日期');
 
 	if (offset === undefined) {
 		delete task.reminderOffset;
@@ -1294,10 +1335,10 @@ function dismissReminderHandler(dbStorage, params) {
 // ── List due reminders (read-only query) ──────────────────────────────
 
 function computeReminderAtPure(task) {
-	const start = getTaskStart(task);
-	if (start === undefined) return undefined;
+	const deadline = getTaskDeadline(task);
+	if (deadline === undefined) return undefined;
 	const offset = task.reminderOffset || 0;
-	return start - offset * MS_PER_MINUTE;
+	return deadline - offset * MS_PER_MINUTE;
 }
 
 function listDueRemindersHandler(dbStorage, params) {
@@ -1315,7 +1356,7 @@ function listDueRemindersHandler(dbStorage, params) {
 
 		const reminderAt = computeReminderAtPure(task);
 		const dueReminder = reminderAt !== undefined && reminderAt <= now;
-		const overdue = includeOverdue && getTaskEnd(task) !== undefined && getTaskEnd(task) <= now;
+		const overdue = includeOverdue && getTaskDeadline(task) !== undefined && getTaskDeadline(task) <= now;
 		if (!dueReminder && !overdue) continue;
 
 		result.push({
@@ -1324,8 +1365,8 @@ function listDueRemindersHandler(dbStorage, params) {
 			status: task.status,
 			priority: task.priority,
 			due_start: formatDate(getTaskStart(task)),
-			due_end: formatDate(task.dueEnd),
-			due_date: formatDate(getTaskStart(task)),
+			due_end: formatDate(getTaskDeadline(task)),
+			due_date: formatDate(getTaskDeadline(task)),
 			reminder_at: formatDate(reminderAt),
 			snoozed_until: formatDate(task.snoozedUntil),
 		});
@@ -1368,11 +1409,10 @@ function getReviewHandler(dbStorage) {
 	visible.forEach(function (task) {
 		if (byStatus[task.status] !== undefined) byStatus[task.status]++;
 		if (byPriority[task.priority] !== undefined) byPriority[task.priority]++;
-		const start = getTaskStart(task);
-		const end = getTaskEnd(task);
-		if (start === undefined) noDueDate++;
-		else if (task.status !== 'done' && start >= today && start <= weekEnd) dueNextSevenDays++;
-		if (task.status !== 'done' && end !== undefined && end < today) overdue++;
+		const deadline = getTaskDeadline(task);
+		if (deadline === undefined) noDueDate++;
+		else if (task.status !== 'done' && deadline >= today && deadline <= weekEnd) dueNextSevenDays++;
+		if (task.status !== 'done' && deadline !== undefined && deadline < today) overdue++;
 	});
 	let history = [];
 	try {
@@ -1430,7 +1470,7 @@ function suggestOrganizationHandler(dbStorage, params) {
 			else if (/(运动|健身|跑步|体检|医生|健康|买|采购|缴费|快递|家务|做饭)/i.test(text)) { patch.group = '生活'; reasons.push('补充分组：生活'); }
 		}
 		if ((!task.tags || task.tags.length === 0) && /(项目|评审|发布|上线)/i.test(text)) { patch.tags = ['项目']; reasons.push('补充标签：项目'); }
-		if (getTaskStart(task) === undefined && /明天/.test(text)) { patch.due_start = tomorrow.getTime(); patch.all_day = true; reasons.push('识别截止日期'); }
+		if (getTaskDeadline(task) === undefined && /明天/.test(text)) { patch.due_end = tomorrow.getTime(); patch.all_day = true; reasons.push('识别截止日期'); }
 		if (Object.keys(patch).length) changes.push({ task_id: task.id, title: task.title, patch: patch, reasons: reasons });
 		else skipped++;
 	});
@@ -1474,6 +1514,8 @@ module.exports = {
 	normalizeRepeatRule,
 	shouldSpawnNextPure,
 	buildNextInstancePure,
+	getTaskDeadline,
+	normalizeDateRange,
 	createTemplateHandler,
 	listTemplatesHandler,
 	deleteTemplateHandler,
