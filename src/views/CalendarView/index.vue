@@ -6,13 +6,14 @@ import SmartTaskInput from '../../components/SmartTaskInput.vue';
 import TaskCard from '../../components/TaskCard.vue';
 import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedModal.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
+import TaskQuickActions from '../../components/TaskQuickActions.vue';
 import ViewToolbar from '../../components/ViewToolbar.vue';
-import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
 import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
+import { useTaskQuickActions } from '../../composables/useTaskQuickActions';
+import { buildCalendarRangeSegments } from '../../services/calendarViewProjection';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
-import type { CreateTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../types/task';
-import { getTaskEnd, getTaskStart } from '../../types/task';
+import type { CreateTaskInput, Task, TaskSearchFilter } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
@@ -47,37 +48,6 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
 
   const { getTaskDepth, getParentTitle } = useTaskHierarchy(() => props.tasks);
 
-  const tasksByDate = computed(() => {
-    const map = new Map<string, Task[]>();
-    for (const t of filteredTasks.value) {
-      const start = getTaskStart(t);
-      const deadline = getTaskEnd(t);
-      if (start === undefined && deadline === undefined) continue;
-      // 全天跨日区间：投影到覆盖的每一天（含首尾）
-      if (t.allDay === true && start !== undefined && deadline !== undefined && start !== deadline) {
-        const cur = new Date(start);
-        cur.setHours(0, 0, 0, 0);
-        const last = new Date(deadline);
-        last.setHours(0, 0, 0, 0);
-        while (cur.getTime() <= last.getTime()) {
-          const k = toKey(cur.getTime());
-          if (!map.has(k)) map.set(k, []);
-          map.get(k)!.push(t);
-          cur.setDate(cur.getDate() + 1);
-        }
-        continue;
-      }
-      // 单点 / 精确时刻区间：按起始日（区间）或截止日（单点）入桶
-      const bucketTs = (start !== undefined && deadline !== undefined && start !== deadline)
-        ? (start ?? deadline!)
-        : (deadline ?? start!);
-      const k = toKey(bucketTs);
-      if (!map.has(k)) map.set(k, []);
-      map.get(k)!.push(t);
-    }
-    return map;
-  });
-
   const calendarCells = computed<CalendarCell[]>(() => {
     const year = currentMonth.value.getFullYear();
     const mo = currentMonth.value.getMonth();
@@ -90,6 +60,16 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
       return { key: k, day: d.getDate(), inCurrentMonth: d.getMonth() === mo, isToday: k === todayKey };
     });
   });
+
+  const calendarSegments = computed(() =>
+    buildCalendarRangeSegments(filteredTasks.value, calendarCells.value.map((cell) => cell.key)),
+  );
+
+  const tasksByDate = computed(() =>
+    new Map(
+      [...calendarSegments.value].map(([key, segments]) => [key, segments.map((segment) => segment.task)]),
+    ),
+  );
 
   const selectedTasks = computed(() =>
     selectedDateKey.value ? (tasksByDate.value.get(selectedDateKey.value) ?? []) : [],
@@ -114,16 +94,8 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
     return `${y}年${m}月${d}日`;
   };
 
-  const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
-
-  const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    guardedChangeStatus(taskId, status);
-    emit('refresh');
-  };
-
-  const handleToggleDone = (task: Task): void => {
-    handleStatusChange(task.id, task.status === 'done' ? 'todo' : 'done');
-  };
+  const { blockedInfo, cycleStatus, setPriority, toggleArchive, dismissBlockedModal } =
+    useTaskQuickActions(() => emit('refresh'));
 
   const handleViewBlockedChildren = (): void => {
     const parent = blockedInfo.value?.parent;
@@ -175,18 +147,30 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
             'day-cell--other': !cell.inCurrentMonth,
             'day-cell--today': cell.isToday,
             'day-cell--selected': selectedDateKey === cell.key,
-          }" @click="selectedDateKey = cell.key">
-            <span class="day-num">{{ cell.day }}</span>
-            <span v-if="tasksByDate.get(cell.key)?.length" class="count-badge count-badge--muted day-count">
-              {{ tasksByDate.get(cell.key)!.length }}
-            </span>
-            <div v-if="tasksByDate.get(cell.key)?.length" class="day-dots">
-              <div v-for="t in tasksByDate.get(cell.key)!.slice(0, 3)" :key="t.id" class="day-dot"
-                :class="t.priority" />
-              <span v-if="tasksByDate.get(cell.key)!.length > 3" class="day-dots__more">
-                +{{ tasksByDate.get(cell.key)!.length - 3 }}
+          }" :aria-label="`${formatLabel(cell.key)}，${tasksByDate.get(cell.key)?.length ?? 0} 项任务`"
+            @click="selectedDateKey = cell.key">
+            <span class="day-cell__header">
+              <span class="day-num">{{ cell.day }}</span>
+              <span v-if="tasksByDate.get(cell.key)?.length" class="count-badge count-badge--muted day-count">
+                {{ tasksByDate.get(cell.key)!.length }}
               </span>
-            </div>
+            </span>
+            <span v-if="calendarSegments.get(cell.key)?.length" class="day-ranges" aria-hidden="true">
+              <template v-for="segment in calendarSegments.get(cell.key)" :key="segment.task.id">
+                <span v-if="segment.position === 'single'" class="range-marker" :class="segment.task.priority">
+                  <span class="range-marker__dot" />
+                  <span>{{ segment.endLabel }}</span>
+                </span>
+                <span v-else class="range-band" :class="[
+                  segment.task.priority,
+                  { 'range-band--open': segment.opensSegment, 'range-band--close': segment.closesSegment },
+                ]">
+                  <span v-if="segment.title" class="range-band__title">{{ segment.title }}</span>
+                  <span v-if="segment.startLabel" class="range-band__time">{{ segment.startLabel }}</span>
+                  <span v-if="segment.endLabel" class="range-band__time range-band__time--end">{{ segment.endLabel }}</span>
+                </span>
+              </template>
+            </span>
           </button>
         </div>
       </div>
@@ -206,10 +190,8 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
             @click="handleOpenEdit">
             <template #actions="{ task: t }">
               <PomodoroStartButton :task="t" />
-              <button type="button" class="btn-icon day-task__toggle" :class="{ active: t.status === 'done' }"
-                :title="t.status === 'done' ? '恢复待办' : '标记完成'" @click.stop="handleToggleDone(t)">
-                <AppIcon :name="t.status === 'done' ? 'circle' : 'check'" :size="14" />
-              </button>
+              <TaskQuickActions :task="t" @cycle-status="cycleStatus" @set-priority="setPriority"
+                @toggle-archive="toggleArchive" />
             </template>
           </TaskCard>
         </div>
@@ -322,19 +304,19 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
   .cal-grid {
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
-    grid-auto-rows: minmax(56px, 1fr);
+    grid-auto-rows: minmax(72px, max-content);
     gap: var(--space-1);
-    flex: 1;
-    min-height: 0;
+    align-content: start;
   }
 
   .day-cell {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 2px;
+    align-items: stretch;
+    gap: var(--space-1);
     padding: var(--space-1);
-    min-height: 56px;
+    min-height: 72px;
+    text-align: left;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
@@ -376,6 +358,13 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
     line-height: 1;
   }
 
+  .day-cell__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-1);
+  }
+
   .day-count {
     height: 16px;
     min-width: 16px;
@@ -383,38 +372,102 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
     font-size: var(--text-xs);
   }
 
-  .day-dots {
+  .day-ranges {
     display: flex;
-    align-items: center;
-    gap: 2px;
-    margin-top: 2px;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
   }
 
-  .day-dot {
+  .range-band,
+  .range-marker {
+    --range-color: var(--color-priority-medium);
+  }
+
+  .range-band.urgent,
+  .range-marker.urgent {
+    --range-color: var(--color-priority-urgent);
+  }
+
+  .range-band.high,
+  .range-marker.high {
+    --range-color: var(--color-priority-high);
+  }
+
+  .range-band.medium,
+  .range-marker.medium {
+    --range-color: var(--color-priority-medium);
+  }
+
+  .range-band.low,
+  .range-marker.low {
+    --range-color: var(--color-priority-low);
+  }
+
+  .range-band {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    height: 19px;
+    margin-inline: calc(var(--space-1) * -1);
+    padding: 0 var(--space-1);
+    color: var(--range-color);
+    background: color-mix(in srgb, var(--range-color) 18%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--range-color) 38%, transparent);
+    font-size: 10px;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .range-band--open {
+    margin-left: 0;
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  }
+
+  .range-band--close {
+    margin-right: 0;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+
+  .range-band--open.range-band--close {
+    border-radius: var(--radius-sm);
+  }
+
+  .range-band__title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 600;
+  }
+
+  .range-band__time {
+    flex-shrink: 0;
+    color: var(--color-text-muted);
+  }
+
+  .range-band__time--end {
+    margin-left: auto;
+    padding-right: 1px;
+  }
+
+  .range-marker {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 4px;
+    max-width: 100%;
+    color: var(--color-text-muted);
+    font-size: 10px;
+    line-height: 16px;
+    white-space: nowrap;
+  }
+
+  .range-marker__dot {
     width: 5px;
     height: 5px;
     border-radius: var(--radius-full);
-  }
-
-  .day-dot.urgent {
-    background: var(--color-priority-urgent);
-  }
-
-  .day-dot.high {
-    background: var(--color-priority-high);
-  }
-
-  .day-dot.medium {
-    background: var(--color-priority-medium);
-  }
-
-  .day-dot.low {
-    background: var(--color-priority-low);
-  }
-
-  .day-dots__more {
-    font-size: 9px;
-    color: var(--color-text-muted);
+    background: var(--range-color);
   }
 
   /* ---------- Day panel ---------- */
@@ -471,24 +524,6 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
     padding: var(--space-5) 0;
   }
 
-  .day-task__toggle {
-    width: 26px;
-    height: 26px;
-    opacity: 0.55;
-    transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-  }
-
-  .day-task__toggle:hover {
-    opacity: 1;
-    background: var(--color-bg-hover);
-  }
-
-  .day-task__toggle.active {
-    opacity: 1;
-    background: var(--color-accent-soft);
-    color: var(--color-accent);
-  }
-
   /* ---------- Narrow screens ---------- */
   @media (max-width: 720px) {
     .month-title {
@@ -498,6 +533,23 @@ import { getTaskEnd, getTaskStart } from '../../types/task';
 
     .today-btn {
       padding: var(--space-1) var(--space-2);
+    }
+
+    .cal-grid {
+      grid-auto-rows: minmax(64px, max-content);
+    }
+
+    .day-cell {
+      min-height: 64px;
+    }
+
+    .range-band {
+      height: 17px;
+      font-size: 9px;
+    }
+
+    .range-band__title {
+      max-width: 48px;
     }
   }
 </style>

@@ -1,13 +1,13 @@
 <script setup lang="ts">
   import { computed, ref } from 'vue';
-import AppIcon from '../../components/AppIcon.vue';
 import PomodoroStartButton from '../../components/PomodoroStartButton.vue';
 import SmartTaskInput from '../../components/SmartTaskInput.vue';
 import TaskCard from '../../components/TaskCard.vue';
 import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedModal.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
+import TaskQuickActions from '../../components/TaskQuickActions.vue';
 import ViewToolbar from '../../components/ViewToolbar.vue';
-import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
+import { useTaskQuickActions } from '../../composables/useTaskQuickActions';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
 import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOption, TaskStatus } from '../../types/task';
@@ -34,12 +34,6 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOpti
     doing: { label: '进行中', color: 'var(--color-priority-medium)' },
     done: { label: '已完成', color: 'var(--color-status-done)' },
   };
-
-  const otherStatuses = (current: TaskStatus): TaskStatus[] =>
-    statusOrder.filter((s) => s !== current);
-
-  const moveIcon = (s: TaskStatus): string =>
-    s === 'done' ? 'checkCircle2' : s === 'doing' ? 'play' : 'circle';
 
   const defaultSortOrder: Record<TaskSortField, 'asc' | 'desc'> = {
     priority: 'desc', dueDate: 'asc', createdAt: 'desc', updatedAt: 'desc',
@@ -99,11 +93,11 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOpti
     return g;
   });
 
-  const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
+  const quickActions = useTaskQuickActions(() => emit('refresh'));
+  const { blockedInfo, dismissBlockedModal } = quickActions;
 
-  const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    guardedChangeStatus(taskId, status);
-    emit('refresh');
+  const handleStatusChange = (task: Task, status: TaskStatus): void => {
+    quickActions.setStatus(task, status);
   };
 
   const handleViewBlockedChildren = (): void => {
@@ -142,17 +136,12 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOpti
 
     const task = props.tasks.find((item) => item.id === taskId);
     if (!task || task.status === status) return;
-    handleStatusChange(task.id, status);
+    handleStatusChange(task, status);
   };
 
   const handleDragEnd = (): void => {
     draggingTaskId.value = '';
     dragOverStatus.value = null;
-  };
-
-  const handleDelete = (taskId: string): void => {
-    taskService.delete(taskId);
-    emit('refresh');
   };
 
   const handleQuickCreate = (payload: SaveTaskInput): void => {
@@ -191,20 +180,14 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOpti
         <!-- Cards -->
         <div class="column-cards">
           <TaskCard v-for="task in columns[status]" :key="task.id" :task="task" variant="panel"
-            priority-display="stripe" :depth="getTaskDepth(task)" :parent-title="getParentTitle(task)" draggable="true"
+            priority-display="stripe" :show-status-toggle="false" :depth="getTaskDepth(task)"
+            :parent-title="getParentTitle(task)" draggable="true"
             :class="{ 'task-card--dragging': draggingTaskId === task.id }" @dragstart="handleDragStart($event, task)"
             @dragend="handleDragEnd" @click="handleOpenEdit">
             <template #actions="{ task: t }">
               <PomodoroStartButton :task="t" />
-              <button v-for="s in otherStatuses(status)" :key="s" type="button" class="btn-icon kanban-card__move"
-                :title="`移至 ${statusMeta[s].label}`" :aria-label="`移至 ${statusMeta[s].label}`"
-                @click.stop="handleStatusChange(t.id, s)">
-                <AppIcon :name="moveIcon(s)" :size="14" />
-              </button>
-              <button type="button" class="btn-icon btn-danger kanban-card__delete" title="删除" aria-label="删除任务"
-                @click.stop="handleDelete(t.id)">
-                <AppIcon name="trash2" :size="14" />
-              </button>
+              <TaskQuickActions :task="t" @cycle-status="quickActions.cycleStatus"
+                @set-priority="quickActions.setPriority" @toggle-archive="quickActions.toggleArchive" />
             </template>
           </TaskCard>
 
@@ -326,18 +309,6 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOpti
   .kanban-view .task-card--dragging {
     opacity: 0.55;
     cursor: grabbing;
-  }
-
-  /* Slotted quick actions — fade by default, reveal on card hover.
-     Slotted buttons carry KanbanView's scoped attr, and TaskCard's root
-     (.task-card) also carries KanbanView's scoped attr, so plain selectors
-     match without :deep. */
-  .kanban-card__move,
-  .kanban-card__delete {
-    width: 26px;
-    height: 26px;
-    opacity: 1;
-    transition: background var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
   }
 
   /* Tablet/compact desktop: keep three columns visible without returning to cramped 220px cards. */

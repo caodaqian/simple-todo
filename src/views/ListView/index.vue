@@ -6,10 +6,11 @@ import SmartTaskInput from '../../components/SmartTaskInput.vue';
 import TaskCard from '../../components/TaskCard.vue';
 import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedModal.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
+import TaskQuickActions from '../../components/TaskQuickActions.vue';
 import ViewToolbar from '../../components/ViewToolbar.vue';
-import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
 import { useImeGuard } from '../../composables/useImeGuard';
 import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
+import { useTaskQuickActions } from '../../composables/useTaskQuickActions';
 import { buildCompletedListRows } from '../../services/listViewProjection';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
@@ -197,16 +198,8 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
     finalizeBatch();
   };
 
-  const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
-
-  const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    guardedChangeStatus(taskId, status);
-    emit('refresh');
-  };
-
-  const handleToggleStatusClick = (task: Task): void => {
-    handleStatusChange(task.id, task.status === 'done' ? 'todo' : task.status === 'todo' ? 'doing' : 'done');
-  };
+  const quickActions = useTaskQuickActions(() => emit('refresh'));
+  const { blockedInfo, dismissBlockedModal } = quickActions;
 
   const handleViewBlockedChildren = (): void => {
     const parent = blockedInfo.value?.parent;
@@ -218,18 +211,9 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
     toggleSelect(task.id);
   };
 
-  const handleDelete = (taskId: string): void => {
-    taskService.delete(taskId);
-    emit('refresh');
-  };
-
-  const handleArchive = (taskId: string): void => {
-    taskService.archive(taskId);
-    emit('refresh');
-  };
-
-  const handleUnarchive = (taskId: string): void => {
-    taskService.unarchive(taskId);
+  const handleDelete = (task: Task): void => {
+    if (!window.confirm(`确定删除“${task.title}”吗？`)) return;
+    taskService.delete(task.id);
     emit('refresh');
   };
 
@@ -297,7 +281,7 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
       <div class="batch-bar__group">
         <button v-if="isArchiveView" type="button" class="btn btn-ghost" @click="batchUnarchive">恢复归档</button>
         <button v-else type="button" class="btn btn-ghost" @click="batchArchive">归档</button>
-        <button type="button" class="btn btn-danger" @click="batchDelete">
+        <button v-if="isArchiveView" type="button" class="btn btn-danger" @click="batchDelete">
           <AppIcon name="trash2" :size="14" /><span>删除</span>
         </button>
         <button type="button" class="btn btn-ghost" @click="exitBatchMode">取消</button>
@@ -328,43 +312,25 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
             <div class="completed-parent-group__children">
               <TaskCard v-for="item in row.children" :key="item.task.id" :task="item.task" variant="row"
                 :selectable="batchMode" :selected="isSelected(item.task.id)" :depth="item.depth"
-                :parent-title="item.parentTitle" @click="handleOpenEdit" @toggle-status="handleToggleStatusClick"
+                :parent-title="item.parentTitle" :show-status-toggle="false" @click="handleOpenEdit"
                 @toggle-select="onToggleSelect">
                 <template #actions="{ task: t }">
                   <PomodoroStartButton v-if="!batchMode" :task="t" />
-                  <button v-if="!batchMode && t.archivedAt" type="button" class="btn-icon task-card__archive" title="恢复归档"
-                    @click.stop="handleUnarchive(t.id)">
-                    <AppIcon name="archiveRestore" :size="14" />
-                  </button>
-                  <button v-else-if="!batchMode" type="button" class="btn-icon task-card__archive" title="归档"
-                    @click.stop="handleArchive(t.id)">
-                    <AppIcon name="archive" :size="14" />
-                  </button>
-                  <button v-if="!batchMode" type="button" class="btn-icon btn-danger task-card__delete" title="删除"
-                    @click.stop="handleDelete(t.id)">
-                    <AppIcon name="trash2" :size="14" />
-                  </button>
+                  <TaskQuickActions v-if="!batchMode" :task="t" :allow-delete="isArchiveView"
+                    @cycle-status="quickActions.cycleStatus" @set-priority="quickActions.setPriority"
+                    @toggle-archive="quickActions.toggleArchive" @delete="handleDelete" />
                 </template>
               </TaskCard>
             </div>
           </section>
           <TaskCard v-else :task="row.item.task" variant="row" :selectable="batchMode"
             :selected="isSelected(row.item.task.id)" :depth="row.item.depth" :parent-title="row.item.parentTitle"
-            @click="handleOpenEdit" @toggle-status="handleToggleStatusClick" @toggle-select="onToggleSelect">
+            :show-status-toggle="false" @click="handleOpenEdit" @toggle-select="onToggleSelect">
             <template #actions="{ task: t }">
               <PomodoroStartButton v-if="!batchMode" :task="t" />
-              <button v-if="!batchMode && t.archivedAt" type="button" class="btn-icon task-card__archive" title="恢复归档"
-                @click.stop="handleUnarchive(t.id)">
-                <AppIcon name="archiveRestore" :size="14" />
-              </button>
-              <button v-else-if="!batchMode" type="button" class="btn-icon task-card__archive" title="归档"
-                @click.stop="handleArchive(t.id)">
-                <AppIcon name="archive" :size="14" />
-              </button>
-              <button v-if="!batchMode" type="button" class="btn-icon btn-danger task-card__delete" title="删除"
-                @click.stop="handleDelete(t.id)">
-                <AppIcon name="trash2" :size="14" />
-              </button>
+              <TaskQuickActions v-if="!batchMode" :task="t" :allow-delete="isArchiveView"
+                @cycle-status="quickActions.cycleStatus" @set-priority="quickActions.setPriority"
+                @toggle-archive="quickActions.toggleArchive" @delete="handleDelete" />
             </template>
           </TaskCard>
         </template>
@@ -372,21 +338,12 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
       <template v-else>
         <TaskCard v-for="task in visibleTasks" :key="task.id" :task="task" variant="row" :selectable="batchMode"
           :selected="isSelected(task.id)" :depth="getTaskDepth(task)" :parent-title="getParentTitle(task)"
-          @click="handleOpenEdit" @toggle-status="handleToggleStatusClick" @toggle-select="onToggleSelect">
+          :show-status-toggle="false" @click="handleOpenEdit" @toggle-select="onToggleSelect">
           <template #actions="{ task: t }">
             <PomodoroStartButton v-if="!batchMode" :task="t" />
-            <button v-if="!batchMode && t.archivedAt" type="button" class="btn-icon task-card__archive" title="恢复归档"
-              @click.stop="handleUnarchive(t.id)">
-              <AppIcon name="archiveRestore" :size="14" />
-            </button>
-            <button v-else-if="!batchMode" type="button" class="btn-icon task-card__archive" title="归档"
-              @click.stop="handleArchive(t.id)">
-              <AppIcon name="archive" :size="14" />
-            </button>
-            <button v-if="!batchMode" type="button" class="btn-icon btn-danger task-card__delete" title="删除"
-              @click.stop="handleDelete(t.id)">
-              <AppIcon name="trash2" :size="14" />
-            </button>
+            <TaskQuickActions v-if="!batchMode" :task="t" :allow-delete="isArchiveView"
+              @cycle-status="quickActions.cycleStatus" @set-priority="quickActions.setPriority"
+              @toggle-archive="quickActions.toggleArchive" @delete="handleDelete" />
           </template>
         </TaskCard>
       </template>
@@ -526,22 +483,6 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
     gap: var(--space-1);
   }
 
-  /* Slotted delete button: hidden by default, revealed on TaskCard hover.
-     The slotted button retains this view's scoped attribute, so the base
-     rule matches. The hover part crosses into TaskCard's scope via :deep(). */
-  .task-card__archive,
-  .task-card__delete {
-    width: 28px;
-    height: 28px;
-    opacity: 0;
-    transition: opacity var(--transition-fast);
-  }
-
-  .list-view :deep(.task-card:hover) .task-card__archive,
-  .list-view :deep(.task-card:hover) .task-card__delete {
-    opacity: 1;
-  }
-
   /* Batch action bar */
   .batch-bar {
     display: flex;
@@ -602,13 +543,6 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
 
     .task-list {
       gap: var(--space-1);
-    }
-
-    .task-card__archive,
-    .task-card__delete {
-      opacity: 1;
-      width: 26px;
-      height: 26px;
     }
 
     .batch-bar {

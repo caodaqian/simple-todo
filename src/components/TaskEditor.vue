@@ -2,6 +2,7 @@
   import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useCompletionBlockedModal } from '../composables/useCompletionBlockedModal';
 import { useImeGuard } from '../composables/useImeGuard';
+import { getNextTaskStatus } from '../composables/useTaskQuickActions';
 import { renderMarkdown } from '../services/markdownService';
 import { notify } from '../services/notifyService';
 import { taskService, type AddSubtaskOverrides } from '../services/taskService';
@@ -12,6 +13,7 @@ import AppIcon from './AppIcon.vue';
 import PomodoroStartButton from './PomodoroStartButton.vue';
 import SmartTaskInput from './SmartTaskInput.vue';
 import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
+import TaskQuickActions from './TaskQuickActions.vue';
 
   type RepeatFormType = '' | RepeatRule['type'];
 
@@ -116,6 +118,18 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
 
   const isEditMode = computed(() => !!currentTask.value);
   const isChildTask = computed(() => !!currentTask.value?.parentTaskId);
+  const quickActionTask = computed<Task>(() => currentTask.value ?? {
+    id: 'draft',
+    title: form.value.title,
+    status: form.value.status,
+    priority: form.value.priority,
+    tags: [],
+    group: '',
+    description: '',
+    subtasks: [],
+    createdAt: 0,
+    updatedAt: 0,
+  });
 
   // ─── Markdown 实时预览（单区域切换 + 防抖） ────────────────
   // 编辑模式与预览模式共用同一区域：聚焦编辑、失焦后自动渲染预览。
@@ -292,24 +306,12 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
     return `${endDateStr} ${form.value.endTime}`;
   });
 
-  const statusLabel = (status: TaskStatus): string =>
-    statusOptions.find((item) => item.value === status)?.label ?? status;
-
-  const priorityLabel = (priority: TaskPriority): string =>
-    priorityOptions.find((item) => item.value === priority)?.label ?? priority;
-
   const formatTaskDue = (task: Task): string => {
     const start = getTaskStart(task);
     if (start === undefined) return '无截止时间';
     const dateText = new Date(start).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
     if (task.allDay) return `${dateText} 全天`;
     return `${dateText} ${formatTimeInput(start)}`;
-  };
-
-  const nextStatus = (status: TaskStatus): TaskStatus => {
-    if (status === 'todo') return 'doing';
-    if (status === 'doing') return 'done';
-    return 'todo';
   };
 
   const makeLocalSubtask = (title: string, overrides?: AddSubtaskOverrides): Task => {
@@ -710,6 +712,66 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
 
   const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
 
+  const handleMainStatusCycle = (): void => {
+    flushSave();
+    const task = currentTask.value;
+    if (!task) {
+      form.value.status = getNextTaskStatus(form.value.status);
+      return;
+    }
+    const updated = guardedChangeStatus(task.id, getNextTaskStatus(task.status));
+    if (!updated) return;
+    currentTask.value = updated;
+    form.value.status = updated.status;
+    lastFlushedSnapshot = formSnapshot();
+    emit('saved', updated);
+  };
+
+  const handleMainPriorityChange = (priority: TaskPriority): void => {
+    flushSave();
+    const task = currentTask.value;
+    if (!task) {
+      form.value.priority = priority;
+      return;
+    }
+    const updated = taskService.update(task.id, { priority });
+    if (!updated) {
+      errorMessage.value = '更新任务优先级失败，请重试';
+      return;
+    }
+    currentTask.value = updated;
+    form.value.priority = updated.priority;
+    lastFlushedSnapshot = formSnapshot();
+    emit('saved', updated);
+  };
+
+  const handleMainArchive = (): void => {
+    flushSave();
+    const task = currentTask.value;
+    if (!task) return;
+    const updated = task.archivedAt === undefined
+      ? taskService.archive(task.id)
+      : taskService.unarchive(task.id);
+    if (!updated) {
+      errorMessage.value = '更新任务归档状态失败，请重试';
+      return;
+    }
+    currentTask.value = updated;
+    emit('saved', updated);
+    if (updated.archivedAt !== undefined) closeEditor();
+  };
+
+  const handleMainDelete = (): void => {
+    const task = currentTask.value;
+    if (!task || !window.confirm(`确定删除“${task.title}”吗？`)) return;
+    if (!taskService.delete(task.id)) {
+      errorMessage.value = '删除任务失败，请重试';
+      return;
+    }
+    emit('saved', task);
+    closeEditor();
+  };
+
   const handleSubtaskStatusChange = (subtask: Task, status: TaskStatus): void => {
     errorMessage.value = '';
     const task = currentTask.value;
@@ -729,7 +791,28 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
     subtasks.value = subtasks.value.map((item) =>
       item.id === subtask.id ? updated : item,
     );
-    lastFlushedSnapshot = formSnapshot();
+    emit('saved', task);
+  };
+
+  const handleSubtaskCycle = (subtask: Task): void => {
+    handleSubtaskStatusChange(subtask, getNextTaskStatus(subtask.status));
+  };
+
+  const handleSubtaskPriorityChange = (subtask: Task, priority: TaskPriority): void => {
+    errorMessage.value = '';
+    const task = currentTask.value;
+    if (!task) {
+      subtasks.value = subtasks.value.map((item) =>
+        item.id === subtask.id ? { ...item, priority, updatedAt: Date.now() } : item,
+      );
+      return;
+    }
+    const updated = taskService.update(subtask.id, { priority });
+    if (!updated) {
+      errorMessage.value = '更新子任务优先级失败，请重试';
+      return;
+    }
+    subtasks.value = subtasks.value.map((item) => item.id === subtask.id ? updated : item);
     emit('saved', task);
   };
 
@@ -1030,19 +1113,18 @@ import TaskCompletionBlockedModal from './TaskCompletionBlockedModal.vue';
                 </div>
               </div>
 
-              <div class="field-grid two-columns">
-                <label class="field-block">
-                  <span class="field-label">状态</span>
-                  <select v-model="form.status">
-                    <option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-                  </select>
-                </label>
-                <label class="field-block">
-                  <span class="field-label">优先级</span>
-                  <select v-model="form.priority">
-                    <option v-for="item in priorityOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-                  </select>
-                </label>
+              <div class="task-property-actions">
+                <span class="field-label">状态与优先级</span>
+                <TaskQuickActions
+                  :task="quickActionTask"
+                  :show-more="isEditMode"
+                  :allow-delete="isEditMode"
+                  popover-z-index="var(--z-dialog)"
+                  @cycle-status="handleMainStatusCycle"
+                  @set-priority="(_, priority) => handleMainPriorityChange(priority)"
+                  @toggle-archive="handleMainArchive"
+                  @delete="handleMainDelete"
+                />
               </div>
             </section>
 
@@ -1308,29 +1390,19 @@ id="task-tag-input"
 
               <ul v-if="subtasks.length > 0" class="subtask-list">
                 <li v-for="subtask in subtasks" :key="subtask.id" class="subtask-item">
-                  <fieldset class="subtask-status-group">
-                    <legend class="sr-only">设置子任务状态：{{ subtask.title }}</legend>
-                    <button v-for="item in statusOptions" :key="item.value" type="button" class="subtask-status-btn"
-                      :class="[`status-${item.value}`, { active: subtask.status === item.value }]" :title="item.label"
-                      @click="handleSubtaskStatusChange(subtask, item.value)">{{ item.label }}</button>
-                  </fieldset>
+                  <TaskQuickActions :task="subtask" :show-more="false" popover-z-index="var(--z-dialog)"
+                    @cycle-status="handleSubtaskCycle" @set-priority="(_, priority) => handleSubtaskPriorityChange(subtask, priority)" />
 
                   <button type="button" class="subtask-main" :disabled="!currentTask"
                     @click="openTaskInEditor(subtask)">
                     <span class="subtask-title" :class="{ done: subtask.status === 'done' }">{{ subtask.title }}</span>
                     <span class="subtask-meta-row">
-                      <span class="subtask-chip"
-                        :class="`priority-${subtask.priority}`">{{ priorityLabel(subtask.priority) }}优先级</span>
                       <span class="subtask-chip muted">{{ formatTaskDue(subtask) }}</span>
                       <span v-if="parentTask" class="subtask-chip muted">属于：{{ parentTask.title }}</span>
                     </span>
                   </button>
 
                   <div class="subtask-actions">
-                    <button type="button" class="subtask-cycle-btn" :class="`status-${subtask.status}`"
-                      @click="handleSubtaskStatusChange(subtask, nextStatus(subtask.status))">
-                      {{ statusLabel(subtask.status) }}
-                    </button>
                     <PomodoroStartButton v-if="currentTask" :task="subtask" />
                     <button v-if="currentTask" type="button" class="btn btn-ghost subtask-open"
                       @click="openTaskInEditor(subtask)">打开</button>
@@ -1662,16 +1734,10 @@ id="task-tag-input"
     min-height: 34px;
   }
 
-  .field-grid {
-    display: grid;
-    gap: var(--space-2);
-  }
-
-  .field-grid.two-columns {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .field-grid.tight {
+  .task-property-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     gap: var(--space-2);
   }
 
@@ -1773,53 +1839,12 @@ id="task-tag-input"
     background: color-mix(in srgb, var(--color-bg-hover) 55%, var(--color-bg-input));
   }
 
-  .subtask-status-group,
   .subtask-actions,
   .subtask-meta-row {
     display: flex;
     align-items: center;
     gap: 4px;
     flex-wrap: wrap;
-  }
-
-  .subtask-status-group {
-    flex-wrap: nowrap;
-    margin: 0;
-    padding: 0;
-    border: 0;
-  }
-
-  .subtask-status-btn,
-  .subtask-cycle-btn {
-    min-height: 24px;
-    padding: 0 7px;
-    border-radius: var(--radius-full);
-    border: 1px solid var(--color-border-subtle);
-    background: color-mix(in srgb, var(--color-bg-elevated) 90%, transparent);
-    color: var(--color-text-muted);
-    font-size: var(--text-xs);
-    cursor: pointer;
-  }
-
-  .subtask-status-btn.active.status-todo,
-  .subtask-cycle-btn.status-todo {
-    color: var(--color-status-todo);
-    border-color: color-mix(in srgb, var(--color-status-todo) 34%, transparent);
-    background: color-mix(in srgb, var(--color-status-todo) 14%, transparent);
-  }
-
-  .subtask-status-btn.active.status-doing,
-  .subtask-cycle-btn.status-doing {
-    color: var(--color-status-doing);
-    border-color: color-mix(in srgb, var(--color-status-doing) 34%, transparent);
-    background: color-mix(in srgb, var(--color-status-doing) 14%, transparent);
-  }
-
-  .subtask-status-btn.active.status-done,
-  .subtask-cycle-btn.status-done {
-    color: var(--color-status-done);
-    border-color: color-mix(in srgb, var(--color-status-done) 34%, transparent);
-    background: color-mix(in srgb, var(--color-status-done) 14%, transparent);
   }
 
   .subtask-main {
@@ -1864,22 +1889,6 @@ id="task-tag-input"
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-secondary);
     font-size: var(--text-xs);
-  }
-
-  .subtask-chip.priority-low {
-    color: var(--color-priority-low);
-  }
-
-  .subtask-chip.priority-medium {
-    color: var(--color-priority-medium);
-  }
-
-  .subtask-chip.priority-high {
-    color: var(--color-priority-high);
-  }
-
-  .subtask-chip.priority-urgent {
-    color: var(--color-priority-urgent);
   }
 
   .subtask-chip.muted {
@@ -2547,14 +2556,6 @@ id="task-tag-input"
       gap: 3px;
     }
 
-    .field-grid {
-      gap: 6px;
-    }
-
-    .field-grid.two-columns {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
     .desc-textarea,
     .desc-preview {
       min-height: 96px;
@@ -2574,7 +2575,6 @@ id="task-tag-input"
       border-radius: var(--radius-sm);
     }
 
-    .subtask-status-group,
     .subtask-actions {
       justify-content: flex-start;
     }

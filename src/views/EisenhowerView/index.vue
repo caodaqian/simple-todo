@@ -6,12 +6,13 @@ import SmartTaskInput from '../../components/SmartTaskInput.vue';
 import TaskCard from '../../components/TaskCard.vue';
 import TaskCompletionBlockedModal from '../../components/TaskCompletionBlockedModal.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
+import TaskQuickActions from '../../components/TaskQuickActions.vue';
 import ViewToolbar from '../../components/ViewToolbar.vue';
-import { useCompletionBlockedModal } from '../../composables/useCompletionBlockedModal';
 import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
+import { useTaskQuickActions } from '../../composables/useTaskQuickActions';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
-import type { SaveTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../types/task';
+import type { SaveTaskInput, Task, TaskSearchFilter } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
@@ -62,15 +63,8 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../ty
     return g;
   });
 
-  const formatDate = (ts?: number): string =>
-    ts ? new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '';
-
-  const { blockedInfo, guardedChangeStatus, dismissBlockedModal } = useCompletionBlockedModal();
-
-  const handleStatusChange = (taskId: string, status: TaskStatus): void => {
-    guardedChangeStatus(taskId, status);
-    emit('refresh');
-  };
+  const quickActions = useTaskQuickActions(() => emit('refresh'));
+  const { blockedInfo, dismissBlockedModal } = quickActions;
 
   const handleViewBlockedChildren = (): void => {
     const parent = blockedInfo.value?.parent;
@@ -129,18 +123,8 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../ty
               :parent-title="getParentTitle(task)" @click="handleOpenEdit">
               <template #actions="{ task: t }">
                 <PomodoroStartButton :task="t" />
-                <button type="button" class="btn-icon q-action-btn" :class="{ active: t.status === 'todo' }" title="待办"
-                  @click.stop="handleStatusChange(t.id, 'todo')">
-                  <AppIcon name="circle" :size="14" />
-                </button>
-                <button type="button" class="btn-icon q-action-btn" :class="{ active: t.status === 'doing' }"
-                  title="进行中" @click.stop="handleStatusChange(t.id, 'doing')">
-                  <AppIcon name="play" :size="14" />
-                </button>
-                <button type="button" class="btn-icon q-action-btn" :class="{ active: t.status === 'done' }" title="已完成"
-                  @click.stop="handleStatusChange(t.id, 'done')">
-                  <AppIcon name="check" :size="14" />
-                </button>
+                <TaskQuickActions :task="t" @cycle-status="quickActions.cycleStatus"
+                  @set-priority="quickActions.setPriority" @toggle-archive="quickActions.toggleArchive" />
               </template>
             </TaskCard>
 
@@ -299,26 +283,6 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskStatus } from '../../ty
     font-size: var(--text-sm);
     text-align: center;
     padding: var(--space-4) 0;
-  }
-
-  /* Status action buttons (in flow, in TaskCard #actions slot) */
-  .q-action-btn {
-    width: 24px;
-    height: 24px;
-    opacity: 0.55;
-    transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-  }
-
-  .q-action-btn:hover {
-    opacity: 1;
-    background: var(--color-bg-hover);
-    color: var(--color-text-primary);
-  }
-
-  .q-action-btn.active {
-    opacity: 1;
-    background: var(--color-accent-soft);
-    color: var(--color-accent);
   }
 
   /* Responsive: narrow screens */
