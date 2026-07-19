@@ -42,6 +42,7 @@ export const isTaskSearchFilter = (value: unknown): value is TaskSearchFilter =>
 	if (!isObjectRecord(value)) return false;
 
 	if (value.keyword !== undefined && typeof value.keyword !== 'string') return false;
+	if (value.titleKeyword !== undefined && typeof value.titleKeyword !== 'string') return false;
 
 	if (value.tags !== undefined) {
 		if (!Array.isArray(value.tags) || value.tags.some((t) => typeof t !== 'string')) return false;
@@ -114,6 +115,7 @@ export const countActiveFilterFields = (filter: TaskSearchFilter | undefined): n
 
 	let count = 0;
 	if (filter.keyword && filter.keyword.trim().length > 0) count += 1;
+	if (filter.titleKeyword && filter.titleKeyword.trim().length > 0) count += 1;
 	if (Array.isArray(filter.tags) && filter.tags.length > 0) count += 1;
 	if (filter.tagMatchMode) count += 1;
 	if (filter.group && filter.group.trim().length > 0) count += 1;

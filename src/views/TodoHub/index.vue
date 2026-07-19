@@ -6,8 +6,10 @@ import PomodoroStatusPill from '../../components/PomodoroStatusPill.vue';
 import SettingsPanel from '../../components/SettingsPanel.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
 import TaskReviewPanel from '../../components/TaskReviewPanel.vue';
+import TemplateLibraryPanel from '../../components/TemplateLibraryPanel.vue';
 import { useImeGuard } from '../../composables/useImeGuard';
 import { catchUpReminders, useReminderScheduler } from '../../composables/useReminderScheduler';
+import { useUtoolsTaskSearch } from '../../composables/useUtoolsTaskSearch';
 import { mergePatch, toggleArrayValue } from '../../services/filterUtils';
 import { notifyService } from '../../services/notifyService';
 import {
@@ -36,6 +38,10 @@ import ListView from '../ListView/index.vue';
   const settings = ref<AppSettings>(settingsService.getSettings());
   const settingsPanelVisible = ref(false);
   const editorVisible = ref(false);
+  const templateLibraryVisible = ref(false);
+  const templateLibraryMode = ref<'select' | 'manage'>('select');
+  const initialTemplateId = ref<string | undefined>(undefined);
+  const newTaskMenuOpen = ref(false);
   const reviewPanelVisible = ref(false);
   const tasks = ref<Task[]>([]);
 
@@ -49,6 +55,13 @@ import ListView from '../ListView/index.vue';
   const activeFilter = ref<TaskSearchFilter>(persistedUiState.activeFilter);
   // 视图排序——list/kanban 接收此 prop；eisenhower/calendar 内部硬编码，忽略此 ref
   const activeSort = ref<TaskSortOption>(persistedUiState.activeSort);
+
+  const utoolsTaskSearch = useUtoolsTaskSearch({
+    getTitleKeyword: () => activeFilter.value.titleKeyword ?? '',
+    onInput: (text) => {
+      activeFilter.value = mergePatch(activeFilter.value, { titleKeyword: text.trim() || undefined });
+    },
+  });
 
   // 持久化运行时视图状态：任一变化即回写 dbStorage。
   watch(
@@ -268,6 +281,23 @@ import ListView from '../ListView/index.vue';
     loadTasks();
   };
 
+  const openNewTask = (): void => {
+    initialTemplateId.value = undefined;
+    newTaskMenuOpen.value = false;
+    editorVisible.value = true;
+  };
+
+  const openTemplateLibrary = (mode: 'select' | 'manage'): void => {
+    newTaskMenuOpen.value = false;
+    templateLibraryMode.value = mode;
+    templateLibraryVisible.value = true;
+  };
+
+  const createFromTemplate = (templateId: string): void => {
+    initialTemplateId.value = templateId;
+    editorVisible.value = true;
+  };
+
   const applySmartOrganization = (taskIds: string[]): void => {
     const plan = buildSmartOrganizationPlan(activeTasks.value);
     const selectedIds = new Set(taskIds);
@@ -322,6 +352,7 @@ import ListView from '../ListView/index.vue';
 
   onMounted(() => {
     loadTasks();
+    utoolsTaskSearch.activate();
     window.addEventListener(TASKS_CHANGED_EVENT, handleTasksChanged);
     // Fallback: refresh when uTools restores db from cloud.
     const utools = window.utools;
@@ -347,6 +378,7 @@ import ListView from '../ListView/index.vue';
   });
 
   onUnmounted(() => {
+    utoolsTaskSearch.dispose();
     window.removeEventListener(TASKS_CHANGED_EVENT, handleTasksChanged);
   });
 </script>
@@ -501,10 +533,19 @@ import ListView from '../ListView/index.vue';
           @reset="resetActiveFilter"
         />
 
-        <button class="btn-primary hub-add-btn" @click="editorVisible = true">
-          <AppIcon name="plus" :size="16" />
-          <span class="hub-add-btn__label">新建任务</span>
-        </button>
+        <div class="new-task-split">
+          <button class="btn-primary hub-add-btn" @click="openNewTask">
+            <AppIcon name="plus" :size="16" />
+            <span class="hub-add-btn__label">新建任务</span>
+          </button>
+          <button type="button" class="btn-primary new-task-menu__trigger" aria-label="打开模板菜单" :aria-expanded="newTaskMenuOpen" @click="newTaskMenuOpen = !newTaskMenuOpen">
+            <AppIcon name="chevronDown" :size="16" />
+          </button>
+          <div v-if="newTaskMenuOpen" class="new-task-menu__popover">
+            <button type="button" @click="openTemplateLibrary('select')">从模板创建</button>
+            <button type="button" @click="openTemplateLibrary('manage')">管理模板</button>
+          </div>
+        </div>
       </header>
 
       <!-- Tag filter chips bar (from tasks in view) -->
@@ -543,7 +584,8 @@ import ListView from '../ListView/index.vue';
     </main>
 
     <!-- ── Overlays ─────────────────────────────────────────── -->
-    <TaskEditor v-model="editorVisible" :task="null" @saved="handleTaskSaved" />
+    <TaskEditor v-model="editorVisible" :task="null" v-bind="initialTemplateId === undefined ? {} : { initialTemplateId }" @saved="handleTaskSaved" />
+    <TemplateLibraryPanel v-model="templateLibraryVisible" :mode="templateLibraryMode" @select="createFromTemplate" />
     <SettingsPanel v-model="settingsPanelVisible" :settings="settings" @change="handleSettingsChange"
       @refresh="loadTasks" />
   </div>
@@ -828,10 +870,17 @@ import ListView from '../ListView/index.vue';
   .hub-add-btn {
     flex-shrink: 0;
     padding: var(--space-1) var(--space-3);
-    display: inline-flex;
-    align-items: center;
     gap: var(--space-1);
+	border-radius: var(--radius-sm) 0 0 var(--radius-sm);
   }
+
+  .new-task-split { position: relative; display: inline-flex; flex-shrink: 0; }
+  .new-task-split > .btn-primary { box-sizing: border-box; height: 32px; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+  .new-task-menu__trigger { width: 32px; min-width: 32px; padding: 0; border-left: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+  .new-task-menu__popover { position: absolute; z-index: var(--z-popover); top: calc(100% + var(--space-1)); right: 0; display: none; min-width: 148px; padding: var(--space-1); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-elevated); box-shadow: var(--shadow-md); }
+  .new-task-menu__popover { display: grid; }
+  .new-task-menu__popover button { border: 0; border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); background: transparent; color: var(--color-text); text-align: left; white-space: nowrap; }
+  .new-task-menu__popover button:hover, .new-task-menu__popover button:focus-visible { background: var(--color-bg-hover); outline: none; }
 
   .tag-filter-bar {
     display: flex;

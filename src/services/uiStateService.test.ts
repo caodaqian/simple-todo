@@ -25,9 +25,10 @@ class MockDbStorage {
 }
 
 const STORAGE_KEY = 'jianyue.uiState';
+const localStorage = new MockDbStorage();
 
 const writeStored = (state: Record<string, unknown>): void => {
-	(window as unknown as { utools: { dbStorage: MockDbStorage } }).utools.dbStorage.setItem(
+	localStorage.setItem(
 		STORAGE_KEY,
 		JSON.stringify(state),
 	);
@@ -38,6 +39,8 @@ describe('uiStateService', () => {
 
 	beforeEach(() => {
 		dbStorage.clear();
+		localStorage.clear();
+		Reflect.set(window, 'localStorage', localStorage);
 		window.utools = { ...(window.utools ?? {}), dbStorage };
 		uiStateService.saveUiState(DEFAULT_UI_STATE);
 	});
@@ -55,6 +58,7 @@ describe('uiStateService', () => {
 	it('persists and re-reads a full view state round-trip', () => {
 		const filter: TaskSearchFilter = {
 			keyword: 'bug',
+			titleKeyword: '登录',
 			tags: ['vue', 'ts'],
 			tagMatchMode: 'all',
 			priority: ['high'],
@@ -76,6 +80,25 @@ describe('uiStateService', () => {
 		expect(restored).toEqual(state);
 		expect(restored.activeFilter).toEqual(filter);
 		expect(restored.activeSort).toEqual(sort);
+	});
+
+	it('copies legacy state once to localStorage and subsequently writes only locally', () => {
+		const legacy: UiState = {
+			currentView: 'kanban',
+			activeSection: 'today',
+			activeFilter: { tags: ['legacy'] },
+			activeSort: { field: 'createdAt', order: 'asc' },
+		};
+		dbStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
+		localStorage.removeItem(STORAGE_KEY);
+
+		expect(uiStateService.getUiState()).toEqual(legacy);
+		expect(localStorage.getItem(STORAGE_KEY)).toBe(JSON.stringify(legacy));
+
+		const next: UiState = { ...legacy, currentView: 'calendar' };
+		uiStateService.saveUiState(next);
+		expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '')).toMatchObject(next);
+		expect(dbStorage.getItem(STORAGE_KEY)).toBe(JSON.stringify(legacy));
 	});
 
 	it('falls back currentView to list when invalid', () => {
@@ -136,7 +159,7 @@ describe('uiStateService', () => {
 		writeStored({
 			currentView: 'list',
 			activeSection: 'inbox',
-			activeFilter: { keyword: 123, tags: 'not-an-array' },
+			activeFilter: { titleKeyword: 123 },
 			activeSort: { field: 'updatedAt', order: 'desc' },
 		});
 		expect(uiStateService.getUiState().activeFilter).toEqual({});

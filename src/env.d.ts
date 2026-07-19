@@ -16,11 +16,42 @@ interface UtoolsRegisterToolHandler {
 	(params: Record<string, unknown>, ctx: ToolContext): Promise<unknown> | unknown;
 }
 
+interface UtoolsDbDocument {
+	_id: string;
+	_rev?: string;
+	data?: unknown;
+	[key: string]: unknown;
+}
+
+type UtoolsDbResultName = 'conflict' | 'not_found';
+
+interface UtoolsDbResult {
+	ok?: boolean;
+	error?: boolean;
+	name?: UtoolsDbResultName;
+	message?: string;
+	id?: string;
+	rev?: string;
+}
+
+interface UtoolsDb {
+	get(id: string): UtoolsDbDocument | null;
+	put(document: UtoolsDbDocument): UtoolsDbResult;
+	remove(document: UtoolsDbDocument): UtoolsDbResult;
+	bulkDocs(documents: UtoolsDbDocument[]): UtoolsDbResult[];
+	allDocs(prefix?: string): UtoolsDbDocument[];
+}
+
 interface Window {
 	services: WindowServices;
 	utools?: {
 		onPluginEnter(callback: (action: { code: string; type?: string; payload?: unknown }) => void): void;
 		onPluginOut(callback: (isKill: boolean) => void): void;
+		setSubInput?(onChange: (details: { text: string }) => void, placeholder?: string, isFocus?: boolean): boolean;
+		setSubInputValue?(text: string): boolean;
+		subInputSelect?(): boolean;
+		removeSubInput?(): boolean;
+		db?: UtoolsDb;
 		dbStorage?: {
 			getItem(key: string): unknown;
 			setItem(key: string, value: string): unknown;

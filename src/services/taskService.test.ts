@@ -25,6 +25,69 @@ class MockDbStorage {
 	}
 }
 
+class MockDocumentDb implements UtoolsDb {
+	private readonly documents = new Map<string, UtoolsDbDocument>();
+
+	private revision = 0;
+
+	private nextPutConflict = false;
+
+	private nextRemoveConflict = false;
+
+	get(id: string): UtoolsDbDocument | null {
+		return this.documents.get(id) ?? null;
+	}
+
+	put(document: UtoolsDbDocument): UtoolsDbResult {
+		if (this.nextPutConflict) {
+			this.nextPutConflict = false;
+			return { ok: false, error: true, name: 'conflict' };
+		}
+
+		const current = this.documents.get(document._id);
+		if (current !== undefined && document._rev !== current._rev) {
+			return { ok: false, error: true, name: 'conflict' };
+		}
+
+		this.revision += 1;
+		const rev = `rev-${this.revision}`;
+		this.documents.set(document._id, { ...document, _rev: rev });
+		return { ok: true, rev };
+	}
+
+	remove(document: UtoolsDbDocument): UtoolsDbResult {
+		if (this.nextRemoveConflict) {
+			this.nextRemoveConflict = false;
+			return { ok: false, error: true, name: 'conflict' };
+		}
+		const current = this.documents.get(document._id);
+		if (current === undefined) {
+			return { ok: false, error: true, name: 'not_found' };
+		}
+		if (document._rev !== current._rev) {
+			return { ok: false, error: true, name: 'conflict' };
+		}
+		this.documents.delete(document._id);
+		return { ok: true, rev: `rev-${this.revision}` };
+	}
+
+	bulkDocs(documents: UtoolsDbDocument[]): UtoolsDbResult[] {
+		return documents.map((document) => this.put(document));
+	}
+
+	allDocs(prefix?: string): UtoolsDbDocument[] {
+		return [...this.documents.values()].filter((document) => prefix === undefined || document._id.startsWith(prefix));
+	}
+
+	forceNextPutConflict(): void {
+		this.nextPutConflict = true;
+	}
+
+	forceNextRemoveConflict(): void {
+		this.nextRemoveConflict = true;
+	}
+}
+
 const createTaskFixture = (overrides: Partial<Task> = {}): Task => ({
 	id: 'task-1',
 	title: '任务 1',
@@ -63,8 +126,129 @@ const dbStorage = new MockDbStorage();
 describe('taskService', () => {
 	beforeEach(() => {
 		dbStorage.clear();
-		window.utools = { ...(window.utools ?? {}), dbStorage };
+		Reflect.set(taskService, 'memoryBackup', null);
+		Reflect.set(window, 'utools', { dbStorage });
 		vi.restoreAllMocks();
+	});
+
+	it('stores a created task in its own native document without document metadata in the payload', () => {
+		const db = new MockDocumentDb();
+		Reflect.set(window, 'utools', { db, dbStorage });
+
+		const task = taskService.create({
+			title: '原生任务',
+			status: 'todo',
+			priority: 'medium',
+			tags: ['native'],
+			group: '收件箱',
+			description: '',
+			subtasks: [],
+		});
+
+		const document = db.get(`jianyue/task/${task.id}`);
+		expect(document).toMatchObject({ _id: `jianyue/task/${task.id}`, data: task });
+		expect(document?.data).not.toHaveProperty('_id');
+		expect(document?.data).not.toHaveProperty('_rev');
+	});
+
+	it('migrates valid legacy arrays into native documents and clears the legacy key', () => {
+		const db = new MockDocumentDb();
+		const legacy = createTaskFixture({ id: 'legacy-native' });
+		const rawLegacy = JSON.stringify([legacy]);
+		Reflect.set(window, 'utools', { db, dbStorage });
+		dbStorage.setItem(STORAGE_KEYS.TASKS, rawLegacy);
+
+		expect(taskService.getAll()).toEqual([legacy]);
+		expect(db.get(`jianyue/task/${legacy.id}`)).toMatchObject({ data: legacy });
+		expect(dbStorage.getItem(STORAGE_KEYS.TASKS)).toBeNull();
+	});
+
+	it('completes a partial native migration without overwriting existing native tasks', () => {
+		const db = new MockDocumentDb();
+		const legacyExisting = createTaskFixture({ id: 'legacy-existing', title: '旧标题' });
+		const nativeExisting = createTaskFixture({ id: legacyExisting.id, title: '原生标题' });
+		const missing = createTaskFixture({ id: 'legacy-missing' });
+		const rawLegacy = JSON.stringify([legacyExisting, missing]);
+		Reflect.set(window, 'utools', { db, dbStorage });
+		dbStorage.setItem(STORAGE_KEYS.TASKS, rawLegacy);
+		db.put({ _id: `jianyue/task/${nativeExisting.id}`, data: nativeExisting });
+
+		expect(taskService.getAll()).toEqual([nativeExisting, missing]);
+		expect(db.get(`jianyue/task/${nativeExisting.id}`)).toMatchObject({ data: nativeExisting });
+		expect(db.get(`jianyue/task/${missing.id}`)).toMatchObject({ data: missing });
+		expect(dbStorage.getItem(STORAGE_KEYS.TASKS)).toBeNull();
+	});
+
+	it('stores separate native documents for separate tasks', () => {
+		const db = new MockDocumentDb();
+		Reflect.set(window, 'utools', { db, dbStorage });
+
+		const first = taskService.create({
+			title: '第一项', status: 'todo', priority: 'low', tags: [], group: '', description: '', subtasks: [],
+		});
+		const second = taskService.create({
+			title: '第二项', status: 'todo', priority: 'high', tags: [], group: '', description: '', subtasks: [],
+		});
+
+		expect(db.allDocs('jianyue/task/').map((document) => document._id)).toEqual([
+			`jianyue/task/${first.id}`,
+			`jianyue/task/${second.id}`,
+		]);
+	});
+
+	it('does not silently overwrite a native document when its revision conflicts', () => {
+		const db = new MockDocumentDb();
+		const task = createTaskFixture({ id: 'native-conflict', title: '原始标题' });
+		Reflect.set(window, 'utools', { db, dbStorage });
+		db.put({ _id: `jianyue/task/${task.id}`, data: task });
+		db.forceNextPutConflict();
+
+		expect(taskService.getById(task.id)).toEqual(task);
+		expect(taskService.update(task.id, { title: '本地修改' })).toBeNull();
+		expect(db.get(`jianyue/task/${task.id}`)).toMatchObject({ data: task });
+	});
+
+	it('preserves remote tasks added after the local native snapshot is saved', () => {
+		const db = new MockDocumentDb();
+		const local = createTaskFixture({ id: 'local-task', title: '本地任务' });
+		const remotelyCreated = createTaskFixture({ id: 'remote-task', title: '远端任务' });
+		Reflect.set(window, 'utools', { db, dbStorage });
+		db.put({ _id: `jianyue/task/${local.id}`, data: local });
+
+		expect(taskService.getAll()).toEqual([local]);
+		db.put({ _id: `jianyue/task/${remotelyCreated.id}`, data: remotelyCreated });
+
+		const locallyUpdated = { ...local, title: '本地已更新' };
+		taskService.replaceAll([locallyUpdated]);
+
+		expect(db.get(`jianyue/task/${local.id}`)).toMatchObject({ data: locallyUpdated });
+		expect(db.get(`jianyue/task/${remotelyCreated.id}`)).toMatchObject({ data: remotelyCreated });
+	});
+
+	it('returns a conflict without overwriting a task updated after the local native snapshot', () => {
+		const db = new MockDocumentDb();
+		const task = createTaskFixture({ id: 'concurrent-task', title: '初始标题' });
+		const remotelyUpdated = { ...task, title: '远端标题' };
+		Reflect.set(window, 'utools', { db, dbStorage });
+		db.put({ _id: `jianyue/task/${task.id}`, data: task });
+
+		expect(taskService.getAll()).toEqual([task]);
+		const current = db.get(`jianyue/task/${task.id}`)!;
+		db.put({ ...current, data: remotelyUpdated });
+
+		expect(taskService.update(task.id, { title: '本地标题' })).toBeNull();
+		expect(db.get(`jianyue/task/${task.id}`)).toMatchObject({ data: remotelyUpdated });
+	});
+
+	it('returns false and preserves the document when a native delete conflicts', () => {
+		const db = new MockDocumentDb();
+		const task = createTaskFixture({ id: 'native-delete-conflict' });
+		Reflect.set(window, 'utools', { db, dbStorage });
+		db.put({ _id: `jianyue/task/${task.id}`, data: task });
+		db.forceNextRemoveConflict();
+
+		expect(taskService.delete(task.id)).toBe(false);
+		expect(db.get(`jianyue/task/${task.id}`)).toMatchObject({ data: task });
 	});
 
 	it('saves a backup before delete and restores it', () => {
@@ -77,10 +261,7 @@ describe('taskService', () => {
 
 		expect(taskService.getAll()).toEqual([b]);
 		expect(taskServiceWithBackup.hasBackup()).toBe(true);
-		expect(JSON.parse(dbStorage.getItem<string>(storageKeysWithBackup.TASKS_BACKUP)!)).toEqual({
-			createdAt: 1000,
-			tasks: [a, b],
-		});
+		expect(dbStorage.getItem(storageKeysWithBackup.TASKS_BACKUP)).toBeNull();
 		expect(taskServiceWithBackup.restoreLatestBackup()).toBe(true);
 		expect(taskService.getAll()).toEqual([a, b]);
 	});

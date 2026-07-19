@@ -8,6 +8,7 @@ try {
 }
 const {
   STORAGE_KEY,
+  TEMPLATES_STORAGE_KEY,
   readTasksFromDb: readTasksFromDbPure,
   writeTasksToDb: writeTasksToDbPure,
   createTaskHandler,
@@ -29,30 +30,83 @@ const {
   suggestOrganizationHandler,
 } = require('./toolHandlers')
 
-// ── dbStorage accessor ────────────────────────────────────────────────
-let pendingTasksPayload = null
+// ── 原生 db 文档适配 ──────────────────────────────────────────────────
+// 任务与模板一实体一文档，避免 dbStorage 单个数组文档的大小和同步冲突问题。
+const DOCUMENT_COLLECTIONS = {
+  [STORAGE_KEY]: { prefix: 'jianyue/task/' },
+  [TEMPLATES_STORAGE_KEY]: { prefix: 'jianyue/template/' },
+}
+
+function nativeDb() {
+  const candidate = window.utools && window.utools.db
+  return candidate && typeof candidate.get === 'function' && typeof candidate.put === 'function' && typeof candidate.remove === 'function' && typeof candidate.allDocs === 'function'
+    ? candidate
+    : null
+}
+
+function nativeDocuments(store, prefix) {
+  const documents = store.allDocs(prefix)
+  return Array.isArray(documents) ? documents.filter(function (document) { return document && typeof document._id === 'string' && document._id.indexOf(prefix) === 0 }) : []
+}
+
+function ensureNativeMigration(store, storage, key, collection) {
+  const existing = nativeDocuments(store, collection.prefix)
+  if (existing.length) return existing
+  const raw = storage.getItem(key)
+  if (typeof raw !== 'string') return existing
+  let legacy
+  try { legacy = JSON.parse(raw) } catch { return existing }
+  if (!Array.isArray(legacy)) return existing
+  legacy.forEach(function (entity) {
+    if (!entity || typeof entity.id !== 'string' || !entity.id) return
+    const result = store.put({ _id: collection.prefix + entity.id, data: entity })
+    if (!result || result.ok !== true) throw new Error('迁移数据失败: ' + (result && (result.message || result.name) || 'unknown'))
+  })
+  if (typeof storage.removeItem === 'function') storage.removeItem(key)
+  return nativeDocuments(store, collection.prefix)
+}
+
+function readNativeCollection(store, storage, key, collection) {
+  return ensureNativeMigration(store, storage, key, collection).map(function (document) { return document.data }).filter(function (entity) {
+    return entity && typeof entity.id === 'string'
+  })
+}
+
+function writeNativeCollection(store, storage, key, collection, value) {
+  let entities
+  try { entities = JSON.parse(value) } catch { throw new Error('写入数据失败：JSON 格式无效') }
+  if (!Array.isArray(entities)) throw new Error('写入数据失败：必须为数组')
+  const existing = new Map(nativeDocuments(store, collection.prefix).map(function (document) { return [document._id, document] }))
+  const expectedIds = new Set()
+  entities.forEach(function (entity) {
+    if (!entity || typeof entity.id !== 'string' || !entity.id) throw new Error('写入数据失败：实体缺少 id')
+    const id = collection.prefix + entity.id
+    expectedIds.add(id)
+    const current = existing.get(id)
+    if (current && JSON.stringify(current.data) === JSON.stringify(entity)) return
+    const result = store.put(Object.assign({ _id: id, data: entity }, current && current._rev ? { _rev: current._rev } : {}))
+    if (!result || result.ok !== true) throw new Error('写入数据失败: ' + (result && (result.message || result.name) || 'unknown'))
+  })
+  existing.forEach(function (document, id) {
+    if (expectedIds.has(id)) return
+    const result = store.remove({ _id: document._id, _rev: document._rev })
+    if (!result || result.ok !== true) throw new Error('删除数据失败: ' + (result && (result.message || result.name) || 'unknown'))
+  })
+  if (typeof storage.removeItem === 'function') storage.removeItem(key)
+}
 
 function db() {
   const storage = window.utools.dbStorage
+  const store = nativeDb()
   return {
     getItem(key) {
-      if (key === STORAGE_KEY && pendingTasksPayload !== null) {
-        const persisted = storage.getItem(key)
-        if (persisted === pendingTasksPayload) {
-          pendingTasksPayload = null
-          return persisted
-        }
-        return pendingTasksPayload
-      }
-      return storage.getItem(key)
+      const collection = DOCUMENT_COLLECTIONS[key]
+      return store && collection ? JSON.stringify(readNativeCollection(store, storage, key, collection)) : storage.getItem(key)
     },
     setItem(key, value) {
-      storage.setItem(key, value)
-      if (key === STORAGE_KEY) {
-        // uTools 的 dbStorage 偶尔会在 setItem 后短暂返回旧值。立即回读；
-        // 未持久化前让后续 MCP 写操作读取本次写入的快照。
-        pendingTasksPayload = storage.getItem(key) === value ? null : value
-      }
+      const collection = DOCUMENT_COLLECTIONS[key]
+      if (store && collection) writeNativeCollection(store, storage, key, collection, value)
+      else storage.setItem(key, value)
     },
   }
 }
@@ -76,6 +130,16 @@ function notifyTasksChanged() {
   }
 }
 
+function notifyTemplatesChanged() {
+  try {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('jianyue:templates-changed'))
+    }
+  } catch {
+    /* ignore — notification is best-effort */
+  }
+}
+
 if (ipcRenderer) {
   ipcRenderer.on('jianyue:tasks-changed', function () {
     notifyTasksChanged()
@@ -83,10 +147,11 @@ if (ipcRenderer) {
 }
 
 // Wrap a write-tool so it notifies the renderer on success.
-function withNotify(handler) {
+function withNotify(handler, notifyChanged) {
   return async function (params) {
     const result = handler(db(), params)
-    notifyTasksChanged()
+    const notifier = notifyChanged || notifyTasksChanged
+    notifier()
     return result
   }
 }
@@ -165,16 +230,16 @@ window.utools.registerTool('todo_suggest_organization', async function (params) 
 })
 window.utools.registerTool('todo_create_template', withNotify(function (params) {
   return createTemplateHandler(db(), params)
-}))
+}, notifyTemplatesChanged))
 window.utools.registerTool('todo_list_templates', async function () {
   return listTemplatesHandler(db())
 })
 window.utools.registerTool('todo_update_template', withNotify(function (params) {
   return updateTemplateHandler(db(), params)
-}))
+}, notifyTemplatesChanged))
 window.utools.registerTool('todo_delete_template', withNotify(function (params) {
   return deleteTemplateHandler(db(), params)
-}))
+}, notifyTemplatesChanged))
 window.utools.registerTool('todo_apply_template', withNotify(function (params) {
   return applyTemplateHandler(db(), params)
 }))

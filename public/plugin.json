@@ -575,7 +575,7 @@
 			}
 		},
 		"todo_list_templates": {
-			"description": "列出全部任务模板；children 是套用时创建的子任务标题列表。没有输入参数，无需传 null。",
+			"description": "列出全部任务模板；child_tasks 是套用时创建的富子任务内容，children 仅用于兼容旧客户端。没有输入参数，无需传 null。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -583,7 +583,7 @@
 			}
 		},
 		"todo_create_template": {
-			"description": "创建可复用任务模板；name 和 title 必填，其余字段可省略或传 null（等同省略）。模板不包含计划时间，套用时再传 due_start。",
+			"description": "创建可复用任务方案；name 和 title 必填，其余字段可省略或传 null（等同省略）。模板保存任务内容和步骤，不保存日期或重复规则。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -649,54 +649,53 @@
 						},
 						"description": "可选。套用时创建的直接子任务标题列表；空数组表示不创建。"
 					},
+					"child_tasks": {
+						"type": [
+							"array",
+							"null"
+						],
+						"items": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string",
+									"description": "必填。非空子任务标题。"
+								},
+								"priority": {
+									"type": "string",
+									"enum": [
+										"low",
+										"medium",
+										"high",
+										"urgent"
+									]
+								},
+								"tags": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								},
+								"group": {
+									"type": "string"
+								},
+								"description": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"title"
+							]
+						},
+						"description": "可选。富子任务列表；提供时优先于 children。每项可覆盖模板的优先级、标签、分组与描述。"
+					},
 					"reminder_offset": {
 						"type": [
 							"number",
 							"null"
 						],
 						"description": "可选。默认提前提醒分钟数，必须为非负数。"
-					},
-					"repeat": {
-						"type": [
-							"object",
-							"null"
-						],
-						"description": "可选。默认重复规则；传 null 等同不重复。",
-						"additionalProperties": false,
-						"properties": {
-							"type": {
-								"type": "string",
-								"enum": [
-									"daily",
-									"weekly",
-									"monthly",
-									"custom"
-								],
-								"description": "必填。重复单位：daily/custom 按天、weekly 按周、monthly 按月。"
-							},
-							"interval": {
-								"type": "number",
-								"description": "必填。正间隔；单位由 type 决定。"
-							},
-							"repeat_until": {
-								"type": [
-									"string",
-									"null"
-								],
-								"description": "可选。停止生成的 ISO 8601 时间；null 等同省略。"
-							},
-							"repeat_count": {
-								"type": [
-									"number",
-									"null"
-								],
-								"description": "可选。最多生成的后续实例数，必须为非负数；null 等同省略。"
-							}
-						},
-						"required": [
-							"type",
-							"interval"
-						]
 					}
 				},
 				"required": [
@@ -706,7 +705,7 @@
 			}
 		},
 		"todo_update_template": {
-			"description": "更新模板字段。template_id 必填；只修改提供的字段。reminder_offset 或 repeat 传 null 会清除；name、title、priority、tags、group、description、children 传 null 等同省略；children 会整体覆盖子任务标题。",
+			"description": "更新模板字段。template_id 必填；只修改提供的字段。reminder_offset 传 null 会清除；name、title、priority、tags、group、description、children、child_tasks 传 null 等同省略；child_tasks 会整体覆盖模板步骤。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -776,54 +775,52 @@
 						},
 						"description": "可选。整体替换子任务标题列表；每项必须为非空字符串，null 等同省略。"
 					},
+					"child_tasks": {
+						"type": [
+							"array",
+							"null"
+						],
+						"items": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string"
+								},
+								"priority": {
+									"type": "string",
+									"enum": [
+										"low",
+										"medium",
+										"high",
+										"urgent"
+									]
+								},
+								"tags": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								},
+								"group": {
+									"type": "string"
+								},
+								"description": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"title"
+							]
+						},
+						"description": "可选。整体替换富子任务步骤；提供时优先于 children。"
+					},
 					"reminder_offset": {
 						"type": [
 							"number",
 							"null"
 						],
 						"description": "可选。新的默认提前提醒分钟数，必须为非负数；null 清除。"
-					},
-					"repeat": {
-						"type": [
-							"object",
-							"null"
-						],
-						"description": "可选。新的默认重复规则；null 清除。",
-						"additionalProperties": false,
-						"properties": {
-							"type": {
-								"type": "string",
-								"enum": [
-									"daily",
-									"weekly",
-									"monthly",
-									"custom"
-								],
-								"description": "必填。重复单位：daily/custom 按天、weekly 按周、monthly 按月。"
-							},
-							"interval": {
-								"type": "number",
-								"description": "必填。正间隔；单位由 type 决定。"
-							},
-							"repeat_until": {
-								"type": [
-									"string",
-									"null"
-								],
-								"description": "可选。停止生成的 ISO 8601 时间；null 等同省略。"
-							},
-							"repeat_count": {
-								"type": [
-									"number",
-									"null"
-								],
-								"description": "可选。最多生成的后续实例数，必须为非负数；null 等同省略。"
-							}
-						},
-						"required": [
-							"type",
-							"interval"
-						]
 					}
 				},
 				"required": [

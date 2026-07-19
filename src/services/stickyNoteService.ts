@@ -97,12 +97,12 @@ class StickyNoteService {
 	saveSource(source: StickyNoteSource): void {
 		const next = cloneSource(source);
 		this.memorySource = next;
-		const dbStorage = this.getDbStorage();
-		if (!dbStorage) return;
+		const localStorage = this.getLocalStorage();
+		if (!localStorage) return;
 		try {
-			dbStorage.setItem(this.storageKey, JSON.stringify(next));
+			localStorage.setItem(this.storageKey, JSON.stringify(next));
 		} catch {
-			// Keep memory fallback when dbStorage fails.
+			// Keep memory fallback when localStorage fails.
 		}
 	}
 
@@ -144,12 +144,31 @@ class StickyNoteService {
 		}
 	}
 
+	private getLocalStorage(): Storage | null {
+		try {
+			return window.localStorage ?? null;
+		} catch {
+			return null;
+		}
+	}
+
 	private readFromStorage(): string | null {
+		const localStorage = this.getLocalStorage();
+		if (!localStorage) return null;
+		try {
+			const localValue = localStorage.getItem(this.storageKey);
+			if (localValue !== null) return localValue;
+		} catch {
+			return null;
+		}
+
 		const dbStorage = this.getDbStorage();
 		if (!dbStorage) return null;
 		try {
 			const value = dbStorage.getItem(this.storageKey);
-			return typeof value === 'string' ? value : null;
+			if (typeof value !== 'string') return null;
+			localStorage.setItem(this.storageKey, value);
+			return value;
 		} catch {
 			return null;
 		}

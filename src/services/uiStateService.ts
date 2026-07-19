@@ -87,15 +87,15 @@ class UiStateService {
 		this.memoryUiState = nextState;
 		this.uiStateRef.value = nextState;
 
-		const dbStorage = this.getDbStorage();
-		if (!dbStorage) {
+		const localStorage = this.getLocalStorage();
+		if (!localStorage) {
 			return;
 		}
 
 		try {
-			dbStorage.setItem(this.storageKey, JSON.stringify(nextState));
+			localStorage.setItem(this.storageKey, JSON.stringify(nextState));
 		} catch {
-			// Gracefully fall back to memory storage when dbStorage fails.
+			// Gracefully fall back to memory storage when localStorage fails.
 		}
 	}
 
@@ -121,7 +121,25 @@ class UiStateService {
 		}
 	}
 
+	private getLocalStorage(): Storage | null {
+		try {
+			return window.localStorage ?? null;
+		} catch {
+			return null;
+		}
+	}
+
 	private readFromStorage(): string | null {
+		const localStorage = this.getLocalStorage();
+		if (!localStorage) return null;
+
+		try {
+			const localValue = localStorage.getItem(this.storageKey);
+			if (localValue !== null) return localValue;
+		} catch {
+			return null;
+		}
+
 		const dbStorage = this.getDbStorage();
 		if (!dbStorage) {
 			return null;
@@ -129,7 +147,9 @@ class UiStateService {
 
 		try {
 			const value = dbStorage.getItem(this.storageKey);
-			return typeof value === 'string' ? value : null;
+			if (typeof value !== 'string') return null;
+			localStorage.setItem(this.storageKey, value);
+			return value;
 		} catch {
 			return null;
 		}

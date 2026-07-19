@@ -89,6 +89,62 @@ describe('filter archived tasks', () => {
 	});
 });
 
+describe('filter title keyword', () => {
+	it('保留标题命中的任务，即使描述不相关', () => {
+		const titleMatch = createTask({
+			id: 'title-match',
+			title: '修复登录问题',
+			description: '发布说明待补充',
+		});
+		const descriptionOnlyMatch = createTask({
+			id: 'description-only-match',
+			title: '准备发布',
+			description: '登录功能待修复',
+		});
+
+		const result = searchAndSortTasks([titleMatch, descriptionOnlyMatch], { titleKeyword: ' 登录 ' });
+
+		expect(result.map((item) => item.id)).toEqual(['title-match']);
+	});
+
+	it('排除仅描述命中的任务', () => {
+		const task = createTask({
+			id: 'description-only',
+			title: '准备发布',
+			description: '修复登录问题',
+		});
+
+		const result = searchAndSortTasks([task], { titleKeyword: '登录' });
+
+		expect(result).toEqual([]);
+	});
+
+	it('同时使用 keyword 和 titleKeyword 时要求两个条件都匹配', () => {
+		const titleOnlyMatch = createTask({
+			id: 'title-only-match',
+			title: '修复登录问题',
+			description: '等待排期',
+		});
+		const keywordOnlyMatch = createTask({
+			id: 'keyword-only-match',
+			title: '准备发布',
+			description: '登录功能已修复',
+		});
+		const bothMatch = createTask({
+			id: 'both-match',
+			title: '修复登录问题',
+			description: '发布前验证',
+		});
+
+		const result = searchAndSortTasks(
+			[titleOnlyMatch, keywordOnlyMatch, bothMatch],
+			{ keyword: '发布', titleKeyword: '登录' },
+		);
+
+		expect(result.map((item) => item.id)).toEqual(['both-match']);
+	});
+});
+
 describe('sort by deadline uses getTaskDeadline', () => {
 	it('orders by dueEnd when dueStart missing', () => {
 		const a = createTask({ id: 'a', dueEnd: 500 });

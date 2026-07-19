@@ -1095,6 +1095,28 @@ function generateTemplateId() {
 	return 'tpl-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
 
+function normalizeTemplateChildTasks(value, defaults) {
+	if (!Array.isArray(value)) return null;
+	return value.map(function (child) {
+		if (!child || typeof child !== 'object' || Array.isArray(child) || typeof child.title !== 'string' || !child.title.trim()) {
+			throw new Error('child_tasks 必须是包含非空 title 的对象数组');
+		}
+		if (child.priority !== undefined && !isTaskPriority(child.priority)) throw new Error('child_tasks.priority 无效');
+		if (child.tags !== undefined && (!Array.isArray(child.tags) || child.tags.some(function (tag) { return typeof tag !== 'string'; }))) {
+			throw new Error('child_tasks.tags 必须为字符串数组');
+		}
+		if (child.group !== undefined && typeof child.group !== 'string') throw new Error('child_tasks.group 必须为字符串');
+		if (child.description !== undefined && typeof child.description !== 'string') throw new Error('child_tasks.description 必须为字符串');
+		return {
+			title: child.title.trim(),
+			priority: child.priority === undefined ? defaults.priority : child.priority,
+			tags: child.tags === undefined ? defaults.tags.slice() : child.tags.slice(),
+			group: child.group === undefined ? defaults.group : child.group.trim(),
+			description: child.description === undefined ? '' : child.description,
+		};
+	});
+}
+
 function toTemplateOutput(tpl) {
 	return {
 		id: tpl.id,
@@ -1105,8 +1127,10 @@ function toTemplateOutput(tpl) {
 		group: tpl.group || '',
 		description: tpl.description || '',
 		children: Array.isArray(tpl.children) ? tpl.children : (tpl.subtasks || []).map(function (subtask) { return subtask.title; }),
+		child_tasks: Array.isArray(tpl.childTasks) ? tpl.childTasks : (Array.isArray(tpl.children) ? tpl.children.map(function (title) {
+			return { title: title, priority: tpl.priority || 'medium', tags: (tpl.tags || []).slice(), group: tpl.group || '', description: '' };
+		}) : []),
 		reminder_offset: tpl.reminderOffset,
-		repeat: tpl.repeat,
 		created_at: formatDate(tpl.createdAt),
 		updated_at: formatDate(tpl.updatedAt),
 	};
@@ -1114,7 +1138,7 @@ function toTemplateOutput(tpl) {
 
 function createTemplateHandler(dbStorage, params) {
 	params = omitOptionalNulls(params, [
-		'priority', 'tags', 'group', 'description', 'children', 'reminder_offset', 'repeat',
+		'priority', 'tags', 'group', 'description', 'children', 'child_tasks', 'reminder_offset', 'repeat',
 	]);
 	const name = params && typeof params.name === 'string' ? params.name.trim() : '';
 	if (!name) throw new Error('模板名称不能为空');
@@ -1122,22 +1146,28 @@ function createTemplateHandler(dbStorage, params) {
 	if (!title) throw new Error('模板标题不能为空');
 	const priority = params && isTaskPriority(params.priority) ? params.priority : 'medium';
 	const reminderOffset = normalizeReminderOffset(params.reminder_offset);
-	const repeat = normalizeRepeatRule(params.repeat);
 	const now = Date.now();
+	const tags = Array.isArray(params.tags) ? params.tags : [];
+	const group = typeof params.group === 'string' ? params.group.trim() : '';
+	const childTasks = params.child_tasks !== undefined
+		? normalizeTemplateChildTasks(params.child_tasks, { priority: priority, tags: tags, group: group })
+		: (Array.isArray(params.children) ? params.children.filter(function (title) { return typeof title === 'string' && title.trim(); }).map(function (title) {
+			return { title: title.trim(), priority: priority, tags: tags.slice(), group: group, description: '' };
+		}) : []);
 	const tpl = {
 		id: generateTemplateId(),
 		name: name,
 		title: title,
 		priority: priority,
-		tags: Array.isArray(params.tags) ? params.tags : [],
-		group: typeof params.group === 'string' ? params.group.trim() : '',
+		tags: tags,
+		group: group,
 		description: typeof params.description === 'string' ? params.description : '',
-		children: Array.isArray(params.children) ? params.children.filter(function (title) { return typeof title === 'string' && title.trim(); }).map(function (title) { return title.trim(); }) : [],
+		childTasks: childTasks,
+		children: childTasks.map(function (child) { return child.title; }),
 		createdAt: now,
 		updatedAt: now,
 	};
 	if (reminderOffset !== undefined) tpl.reminderOffset = reminderOffset;
-	if (repeat !== undefined) tpl.repeat = repeat;
 	const list = readTemplatesFromDb(dbStorage);
 	list.push(tpl);
 	writeTemplatesToDb(dbStorage, list);
@@ -1150,7 +1180,7 @@ function listTemplatesHandler(dbStorage) {
 }
 
 function updateTemplateHandler(dbStorage, params) {
-	params = omitOptionalNulls(params, ['name', 'title', 'priority', 'tags', 'group', 'description', 'children']);
+	params = omitOptionalNulls(params, ['name', 'title', 'priority', 'tags', 'group', 'description', 'children', 'child_tasks']);
 	const id = params && params.template_id;
 	if (!id) throw new Error('template_id 不能为空');
 	const templates = readTemplatesFromDb(dbStorage);
@@ -1180,17 +1210,21 @@ function updateTemplateHandler(dbStorage, params) {
 	if (hasOwn(params, 'children')) {
 		if (!Array.isArray(params.children) || params.children.some(function (title) { return typeof title !== 'string' || !title.trim(); })) throw new Error('children 必须是非空字符串数组');
 		template.children = params.children.map(function (title) { return title.trim(); });
+		template.childTasks = template.children.map(function (title) {
+			return { title: title, priority: template.priority, tags: template.tags.slice(), group: template.group, description: '' };
+		});
+	}
+	if (hasOwn(params, 'child_tasks')) {
+		const childTasks = normalizeTemplateChildTasks(params.child_tasks, { priority: template.priority, tags: template.tags, group: template.group });
+		template.childTasks = childTasks;
+		template.children = childTasks.map(function (child) { return child.title; });
 	}
 	if (hasOwn(params, 'reminder_offset')) {
 		const offset = normalizeReminderOffset(params.reminder_offset);
 		if (offset === undefined) delete template.reminderOffset;
 		else template.reminderOffset = offset;
 	}
-	if (hasOwn(params, 'repeat')) {
-		const rule = normalizeRepeatRule(params.repeat);
-		if (rule === undefined) delete template.repeat;
-		else template.repeat = rule;
-	}
+	delete template.repeat;
 	template.updatedAt = Date.now();
 	writeTemplatesToDb(dbStorage, templates);
 	return { template_id: template.id, name: template.name };
@@ -1244,16 +1278,17 @@ function applyTemplateHandler(dbStorage, params) {
 	if (dueEnd !== undefined) task.dueEnd = dueEnd;
 	if (params.all_day === true) task.allDay = true;
 	if (tpl.reminderOffset !== undefined) task.reminderOffset = tpl.reminderOffset;
-	if (tpl.repeat !== undefined) task.repeat = tpl.repeat;
 
 	const tasks = readTasksFromDb(dbStorage);
 	tasks.push(task);
-	const childTitles = Array.isArray(tpl.children) ? tpl.children : (tpl.subtasks || []).map(function (subtask) { return subtask.title; });
-	childTitles.forEach(function (childTitle) {
-		if (typeof childTitle !== 'string' || !childTitle.trim()) return;
+	const childTasks = Array.isArray(tpl.childTasks) ? tpl.childTasks : (Array.isArray(tpl.children) ? tpl.children.map(function (title) {
+		return { title: title, priority: task.priority, tags: task.tags, group: task.group, description: '' };
+	}) : (tpl.subtasks || []).map(function (subtask) { return { title: subtask.title, priority: task.priority, tags: task.tags, group: task.group, description: '' }; }));
+	childTasks.forEach(function (child) {
+		if (!child || typeof child.title !== 'string' || !child.title.trim()) return;
 		tasks.push({
-			id: generateId(), title: childTitle.trim(), status: 'todo', priority: task.priority,
-			tags: task.tags.slice(), group: task.group, description: '', subtasks: [], parentTaskId: task.id,
+			id: generateId(), title: child.title.trim(), status: 'todo', priority: isTaskPriority(child.priority) ? child.priority : task.priority,
+			tags: Array.isArray(child.tags) ? child.tags.slice() : task.tags.slice(), group: typeof child.group === 'string' ? child.group : task.group, description: typeof child.description === 'string' ? child.description : '', subtasks: [], parentTaskId: task.id,
 			createdAt: now, updatedAt: now,
 		});
 	});

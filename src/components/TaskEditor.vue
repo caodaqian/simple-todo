@@ -6,8 +6,8 @@ import { getNextTaskStatus } from '../composables/useTaskQuickActions';
 import { renderMarkdown } from '../services/markdownService';
 import { notify } from '../services/notifyService';
 import { taskService, type AddSubtaskOverrides } from '../services/taskService';
-import { templateService, type CreateTemplateInput } from '../services/templateService';
-import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
+import { templateService } from '../services/templateService';
+import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus } from '../types/task';
 import { getTaskDeadline, getTaskStart, normalizeDateRange } from '../types/task';
 import AppIcon from './AppIcon.vue';
 import PomodoroStartButton from './PomodoroStartButton.vue';
@@ -49,6 +49,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
     modelValue: boolean;
     task?: Task | null;
     initialDueDate?: string;
+		initialTemplateId?: string;
   }>();
 
   const emit = defineEmits<{
@@ -75,8 +76,8 @@ import TaskQuickActions from './TaskQuickActions.vue';
   const parentTask = ref<Task | null>(null);
   const subtasks = ref<Task[]>([]);
   const errorMessage = ref('');
-  const templates = ref<TaskTemplate[]>([]);
-  const selectedTemplateId = ref('');
+  const templateSaveVisible = ref(false);
+  const templateNameDraft = ref('');
 
   // chip 输入相关
   const tagDraft = ref('');
@@ -221,63 +222,19 @@ import TaskQuickActions from './TaskQuickActions.vue';
     form.value.reminderOffset = value === '' ? null : Number(value);
   };
 
-  const refreshTemplates = (): void => {
-    templates.value = templateService.list();
-  };
-
-  const applySelectedTemplate = (): void => {
-    const tpl = templates.value.find((item) => item.id === selectedTemplateId.value);
-    if (!tpl) {
-      errorMessage.value = '请选择要套用的模板';
-      return;
-    }
-
-    form.value.title = tpl.title;
-    form.value.priority = tpl.priority;
-    form.value.group = tpl.group;
-    form.value.tags = [...tpl.tags];
-    form.value.description = tpl.description;
-    form.value.reminderOffset = tpl.reminderOffset !== undefined ? tpl.reminderOffset : null;
-    form.value.repeatType = tpl.repeat?.type ?? '';
-    form.value.repeatInterval = tpl.repeat?.interval ?? 1;
-    form.value.repeatUntilDate = tpl.repeat?.repeatUntil !== undefined ? formatDateInput(tpl.repeat.repeatUntil) : '';
-    errorMessage.value = '';
-    flushDescRender();
+  const openTemplateSave = (): void => {
+    if (!currentTask.value || currentTask.value.parentTaskId) return;
+    templateNameDraft.value = `${currentTask.value.title}模板`;
+    templateSaveVisible.value = true;
   };
 
   const saveCurrentAsTemplate = (): void => {
-    const name = window.prompt('请输入模板名称')?.trim();
-    if (!name) return;
-
-    const f = form.value;
-    const input: CreateTemplateInput = {
-      name,
-      title: f.title.trim() || name,
-      priority: f.priority,
-      tags: [...f.tags],
-      group: f.group.trim(),
-      description: f.description,
-    };
-    if (f.reminderOffset !== null && f.reminderOffset >= 0) {
-      input.reminderOffset = f.reminderOffset;
-    }
-    if (f.repeatType) {
-      const repeat: RepeatRule = {
-        type: f.repeatType,
-        interval: f.repeatInterval > 0 ? f.repeatInterval : 1,
-      };
-      if (f.repeatUntilDate) {
-        const repeatUntil = dateInputToTimestamp(f.repeatUntilDate);
-        if (!Number.isNaN(repeatUntil)) repeat.repeatUntil = repeatUntil;
-      }
-      input.repeat = repeat;
-    }
-
-    const tpl = templateService.create(input);
-    refreshTemplates();
-    selectedTemplateId.value = tpl.id;
-    errorMessage.value = '';
-    notify('模板保存成功', `“${tpl.name}”已保存`);
+    const task = currentTask.value;
+    const name = templateNameDraft.value.trim();
+    if (!task || task.parentTaskId || !name) return;
+    const template = templateService.createFromTask(name, task, taskService.getChildTasks(task.id));
+    templateSaveVisible.value = false;
+    notify('模板保存成功', `“${template.name}”已保存`);
   };
 
   // 截止时间摘要展示在 hero
@@ -314,7 +271,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
     return `${dateText} ${formatTimeInput(start)}`;
   };
 
-  const makeLocalSubtask = (title: string, overrides?: AddSubtaskOverrides): Task => {
+  const makeLocalSubtask = (title: string, overrides?: AddSubtaskOverrides, description = ''): Task => {
     const now = Date.now();
     const draft: Task = {
       id: `draft-${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
@@ -323,7 +280,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
       priority: overrides?.priority ?? form.value.priority,
       tags: overrides?.tags ?? [...form.value.tags],
       group: overrides?.group ?? form.value.group.trim(),
-      description: '',
+      description,
       subtasks: [],
       createdAt: now,
       updatedAt: now,
@@ -582,8 +539,8 @@ import TaskQuickActions from './TaskQuickActions.vue';
   const resetForm = (nextTask: Task | null | undefined = props.task): void => {
     const task = nextTask ?? null;
     currentTask.value = task;
-    refreshTemplates();
-    selectedTemplateId.value = '';
+    templateSaveVisible.value = false;
+    templateNameDraft.value = '';
 
     if (task) {
       parentTask.value = taskService.getParentTask(task);
@@ -623,6 +580,22 @@ import TaskQuickActions from './TaskQuickActions.vue';
         form.value.endDate = props.initialDueDate;
       }
       subtasks.value = [];
+    if (props.initialTemplateId) {
+      try {
+        const draft = templateService.buildDraft(props.initialTemplateId);
+        form.value.title = draft.task.title;
+        form.value.priority = draft.task.priority;
+        form.value.group = draft.task.group;
+        form.value.tags = [...draft.task.tags];
+        form.value.description = draft.task.description;
+        form.value.reminderOffset = draft.task.reminderOffset ?? null;
+        subtasks.value = draft.children.map((child) => makeLocalSubtask(child.title, {
+          priority: child.priority, tags: [...child.tags], group: child.group,
+        }, child.description));
+      } catch {
+        errorMessage.value = '模板不存在或已被删除';
+      }
+    }
     }
 
     tagDraft.value = '';
@@ -637,7 +610,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
   };
 
   watch(
-    () => [props.modelValue, props.task, props.initialDueDate] as const,
+    () => [props.modelValue, props.task, props.initialDueDate, props.initialTemplateId] as const,
     ([visible]) => {
       if (visible) {
         resetForm();
@@ -1044,6 +1017,9 @@ import TaskQuickActions from './TaskQuickActions.vue';
             <p v-if="isEditMode" class="task-editor-subtitle">编辑后自动保存</p>
           </div>
           <div class="task-editor-actions">
+            <button v-if="isEditMode && !isChildTask" type="button" class="btn btn-ghost" @click="openTemplateSave">
+              保存为模板
+            </button>
             <button type="button" class="btn btn-ghost btn-icon" title="关闭" aria-label="关闭" @click="closeEditor">
               <AppIcon name="x" :size="18" />
             </button>
@@ -1081,30 +1057,6 @@ import TaskQuickActions from './TaskQuickActions.vue';
           </section>
 
           <aside class="editor-side-column" aria-label="任务属性">
-            <section class="side-card template-card">
-              <div class="section-heading compact">
-                <div>
-                  <p class="section-kicker">模板</p>
-                  <h3>任务模板</h3>
-                </div>
-              </div>
-
-              <label class="field-block">
-                <span class="field-label">选择模板</span>
-                <select v-model="selectedTemplateId" class="template-select" :disabled="templates.length === 0">
-                  <option value="">{{ templates.length > 0 ? '请选择模板' : '暂无模板' }}</option>
-                  <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">{{ tpl.name }}</option>
-                </select>
-              </label>
-
-              <div class="template-action-row">
-                <button type="button" class="btn btn-primary" :disabled="!selectedTemplateId"
-                  @click="applySelectedTemplate">一键套用</button>
-                <button type="button" class="btn btn-ghost" @click="saveCurrentAsTemplate">保存当前为模板</button>
-              </div>
-              <p class="field-hint">套用模板不会覆盖当前截止时间。</p>
-            </section>
-
             <section class="side-card">
               <div class="section-heading compact">
                 <div>
@@ -1423,6 +1375,21 @@ id="task-tag-input"
           <button type="button" class="btn btn-ghost" @click="closeEditor">{{ isEditMode ? '完成' : '取消' }}</button>
           <button v-if="!isEditMode" type="button" class="btn btn-primary" @click="handleCreate">创建任务</button>
         </footer>
+
+        <div v-if="templateSaveVisible" class="template-save-mask" @click.self="templateSaveVisible = false">
+          <form class="template-save-dialog" aria-label="保存任务模板" @submit.prevent="saveCurrentAsTemplate">
+            <h3>保存为模板</h3>
+            <p>将当前任务内容及其直接子任务保存为可复用方案；日期和重复规则不会保存。</p>
+            <label class="field-block">
+              <span class="field-label">模板名称</span>
+              <input v-model.trim="templateNameDraft" type="text" maxlength="80" required autofocus />
+            </label>
+            <div class="template-save-actions">
+              <button type="button" class="btn btn-ghost" @click="templateSaveVisible = false">取消</button>
+              <button type="submit" class="btn btn-primary">保存模板</button>
+            </div>
+          </form>
+        </div>
       </dialog>
     </div>
   </Teleport>
@@ -1442,6 +1409,7 @@ id="task-tag-input"
   }
 
   .task-editor {
+	position: relative;
     width: min(960px, calc(100vw - var(--space-6)));
     height: min(720px, calc(100vh - var(--space-6)));
     max-height: calc(100vh - var(--space-6));
@@ -2267,24 +2235,12 @@ id="task-tag-input"
   }
 
   /* ── 提醒 & 重复 cards ─────────────────────────────── */
-  .template-action-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    margin-top: var(--space-2);
-  }
-
-  .template-action-row .btn {
-    flex: 1 1 120px;
-  }
-
   .reminder-select-row {
     display: flex;
     align-items: center;
     gap: var(--space-2);
   }
 
-  .template-select,
   .reminder-select,
   .repeat-type-select,
   .repeat-date-input,
@@ -2353,6 +2309,33 @@ id="task-tag-input"
     color: var(--color-text-muted);
     font-size: var(--text-xs);
   }
+
+  .template-save-mask {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    padding: var(--space-4);
+    background: var(--mask-medium);
+  }
+
+  .template-save-dialog {
+    width: min(420px, 100%);
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-elevated);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .template-save-dialog h3,
+  .template-save-dialog p { margin: 0; }
+  .template-save-dialog p { color: var(--color-text-muted); font-size: var(--text-sm); line-height: 1.5; }
+  .template-save-dialog input { width: 100%; padding: var(--space-2); border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); }
+  .template-save-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
 
   .desc-preview {
     font-size: var(--text-sm);

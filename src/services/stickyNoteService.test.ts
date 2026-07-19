@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SavedFilterView } from '../types/settings';
+import type { StickyNoteSource } from '../types/stickyNote';
 import { stickyNoteService } from './stickyNoteService';
 
 class MockDbStorage {
@@ -24,9 +25,12 @@ class MockDbStorage {
 
 describe('stickyNoteService', () => {
 	const dbStorage = new MockDbStorage();
+	const localStorage = new MockDbStorage();
 
 	beforeEach(() => {
 		dbStorage.clear();
+		localStorage.clear();
+		Reflect.set(window, 'localStorage', localStorage);
 		window.utools = { ...(window.utools ?? {}), dbStorage } as typeof window.utools;
 	});
 
@@ -46,6 +50,21 @@ describe('stickyNoteService', () => {
 		expect(restored.view).toBe('kanban');
 		expect(restored.filter.tags).toEqual(['work']);
 		expect(restored.sort).toEqual({ field: 'priority', order: 'desc' });
+	});
+
+	it('copies a legacy source locally and does not overwrite the legacy key', () => {
+		const legacy: StickyNoteSource = {
+			sourceKind: 'current', title: '旧便签', view: 'list', section: 'inbox',
+			filter: {}, updatedAt: 1,
+		};
+		dbStorage.setItem('jianyue.stickyNote', JSON.stringify(legacy));
+
+		expect(stickyNoteService.getSource()).toMatchObject(legacy);
+		expect(localStorage.getItem('jianyue.stickyNote')).toBe(JSON.stringify(legacy));
+
+		stickyNoteService.saveSource({ ...legacy, title: '新便签' });
+		expect(JSON.parse(localStorage.getItem('jianyue.stickyNote') ?? '')).toMatchObject({ title: '新便签' });
+		expect(dbStorage.getItem('jianyue.stickyNote')).toBe(JSON.stringify(legacy));
 	});
 
 	it('builds source from saved view', () => {

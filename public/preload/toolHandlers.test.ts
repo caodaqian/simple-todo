@@ -1193,6 +1193,19 @@ describe('toolHandlers – pure logic', () => {
 			expect(list.templates[0]!.name).toBe('站会模板');
 		});
 
+		it('stores rich child tasks and never persists repeat rules', () => {
+			const created = createTemplateHandler(db, {
+				name: '发布', title: '发布版本', priority: 'high', repeat: { type: 'weekly', interval: 1 },
+				child_tasks: [{ title: '回归测试', priority: 'medium', tags: ['qa'], group: '测试', description: '执行回归' }],
+			}) as { template_id: string };
+			const template = (listTemplatesHandler(db) as { templates: Array<Record<string, unknown>> }).templates
+				.find((item) => item.id === created.template_id)!;
+			expect(template.repeat).toBeUndefined();
+			expect(template.child_tasks).toEqual([{
+				title: '回归测试', priority: 'medium', tags: ['qa'], group: '测试', description: '执行回归',
+			}]);
+		});
+
 		it('throws on empty name or title', () => {
 			expect(() => createTemplateHandler(db, { name: '', title: 'x' })).toThrow('模板名称不能为空');
 			expect(() => createTemplateHandler(db, { name: 'n', title: '' })).toThrow('模板标题不能为空');
@@ -1394,7 +1407,7 @@ describe('MCP schema contract', () => {
 		}
 	});
 
-	it('accepts null for optional schedule and repeat fields on create tools', () => {
+	it('accepts null for optional schedule fields and rich template children', () => {
 		for (const toolName of ['todo_create_task', 'todo_apply_template']) {
 			const properties = plugin.tools[toolName]!.inputSchema.properties;
 			expect(properties.due_start!.type).toContain('null');
@@ -1402,7 +1415,9 @@ describe('MCP schema contract', () => {
 			expect(properties.all_day!.type).toContain('null');
 		}
 		expect(plugin.tools.todo_create_task!.inputSchema.properties.repeat!.type).toContain('null');
-		expect(plugin.tools.todo_create_template!.inputSchema.properties.repeat!.type).toContain('null');
+		expect(plugin.tools.todo_create_template!.inputSchema.properties.child_tasks!.type).toContain('null');
+		expect(plugin.tools.todo_update_template!.inputSchema.properties.child_tasks!.type).toContain('null');
+		expect(plugin.tools.todo_create_template!.inputSchema.properties).not.toHaveProperty('repeat');
 	});
 });
 

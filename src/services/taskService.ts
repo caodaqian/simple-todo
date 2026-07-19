@@ -10,16 +10,30 @@ import type {
 	UpdateTaskInput,
 } from '../types/task';
 import { normalizeDateRange } from '../types/task';
+import {
+	createDocumentStore,
+	type DocumentRecord,
+	type DocumentStore,
+	type DocumentWriteResult,
+} from './documentStore';
 import { buildNextInstance, shouldSpawnNext } from './repeatService';
 import { STORAGE_KEYS } from './storageKeys';
 
 interface UtoolsDbStorage {
 	getItem(key: string): unknown;
 	setItem(key: string, value: string): unknown;
+	removeItem?(key: string): unknown;
 }
 
 interface UtoolsLike {
+	db?: UtoolsDb;
 	dbStorage?: UtoolsDbStorage;
+}
+
+class TaskDocumentWriteError extends Error {
+	constructor(readonly result: DocumentWriteResult) {
+		super((result.status === 'ok' ? undefined : result.message) ?? `任务文档写入失败：${result.status}`);
+	}
 }
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> => {
@@ -440,12 +454,44 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 
 class TaskService {
 	private readonly storageKey = STORAGE_KEYS.TASKS;
+	private readonly taskDocumentPrefix = STORAGE_KEYS.TASK_DOCUMENT_PREFIX;
 	private readonly backupStorageKey = STORAGE_KEYS.TASKS_BACKUP;
 
 	private memoryTasks: Task[] = [];
 	private memoryBackup: string | null = null;
+	private nativeTaskBaseline = new Map<string, DocumentRecord<Task>>();
 
 	getAll(): Task[] {
+		const documentStore = this.getDocumentStore();
+		if (documentStore) {
+			const legacyTasks = this.readLegacyTasks();
+			if (legacyTasks.length > 0) {
+				for (const task of legacyTasks) {
+					if (documentStore.get(this.getTaskDocumentId(task.id)) !== null) {
+						continue;
+					}
+
+					const result = documentStore.write({
+						_id: this.getTaskDocumentId(task.id),
+						data: cloneTask(task),
+					});
+					if (result.status === 'conflict') {
+						documentStore.get(this.getTaskDocumentId(task.id));
+						continue;
+					}
+					if (result.status !== 'ok') {
+						throw new TaskDocumentWriteError(result);
+					}
+				}
+				this.clearLegacyTasks();
+			}
+
+			const migratedTasks = this.readNativeTasks(documentStore);
+			this.memoryTasks = migratedTasks;
+			return [...migratedTasks];
+		}
+
+		this.nativeTaskBaseline.clear();
 		const raw = this.readFromStorage();
 
 		if (raw === null) {
@@ -556,8 +602,11 @@ class TaskService {
 	}
 
 	saveTask(input: SaveTaskInput): Task {
+		return this.saveTaskFromTasks(input, this.getTasksForWrite());
+	}
+
+	private saveTaskFromTasks(input: SaveTaskInput, tasks: Task[]): Task {
 		const now = Date.now();
-		const tasks = this.getAll();
 
 		if (input.id) {
 			const index = tasks.findIndex((task) => task.id === input.id);
@@ -582,7 +631,7 @@ class TaskService {
 	}
 
 	update(taskId: string, updates: UpdateTaskInput): Task | null {
-		const tasks = this.getAll();
+		const tasks = this.getTasksForWrite();
 		const index = tasks.findIndex((task) => task.id === taskId);
 
 		if (index === -1) {
@@ -658,7 +707,14 @@ class TaskService {
 					? {}
 					: { archivedAt: current.archivedAt }),
 		};
-		return this.saveTask(updateInput);
+		try {
+			return this.saveTaskFromTasks(updateInput, tasks);
+		} catch (error) {
+			if (error instanceof TaskDocumentWriteError && error.result.status === 'conflict') {
+				return null;
+			}
+			throw error;
+		}
 	}
 
 	archive(taskId: string): Task | null {
@@ -687,7 +743,7 @@ class TaskService {
 			return { importedCount: 0, duplicateCount: 0, invalidCount: 1 };
 		}
 
-		const currentTasks = this.getAll();
+		const currentTasks = this.getTasksForWrite();
 		const nextTasks = [...currentTasks];
 		const existingIds = new Set(currentTasks.map((task) => task.id));
 		let importedCount = 0;
@@ -722,7 +778,7 @@ class TaskService {
 	}
 
 	replaceAll(tasks: Task[]): void {
-		this.saveBackup(this.getAll());
+		this.saveBackup(this.getTasksForWrite());
 		this.saveAll(tasks.map(cloneTask));
 	}
 
@@ -741,7 +797,7 @@ class TaskService {
 	}
 
 	delete(taskId: string): boolean {
-		const tasks = this.getAll();
+		const tasks = this.getTasksForWrite();
 		const next = tasks.filter((task) => task.id !== taskId && task.parentTaskId !== taskId);
 
 		if (next.length === tasks.length) {
@@ -749,7 +805,14 @@ class TaskService {
 		}
 
 		this.saveBackup(tasks);
-		this.saveAll(next);
+		try {
+			this.saveAll(next);
+		} catch (error) {
+			if (error instanceof TaskDocumentWriteError && error.result.status === 'conflict') {
+				return false;
+			}
+			throw error;
+		}
 		return true;
 	}
 
@@ -786,7 +849,7 @@ class TaskService {
 	}
 
 	deleteSubtask(taskId: string, subtaskId: string): boolean {
-		const tasks = this.getAll();
+		const tasks = this.getTasksForWrite();
 		if (!tasks.some((task) => task.id === subtaskId && task.parentTaskId === taskId)) {
 			return false;
 		}
@@ -812,7 +875,7 @@ class TaskService {
 	 */
 	private promoteParentIfTodo(parentTaskId: string | undefined): void {
 		if (!parentTaskId) return;
-		const tasks = this.getAll();
+		const tasks = this.getTasksForWrite();
 		const parentIndex = tasks.findIndex((task) => task.id === parentTaskId);
 		if (parentIndex === -1) return;
 		const parent = tasks[parentIndex]!;
@@ -834,7 +897,7 @@ class TaskService {
 	private maybeSpawnNextInstance(task: Task): void {
 		if (!shouldSpawnNext(task)) return;
 		const next = buildNextInstance(task);
-		const tasks = this.getAll();
+		const tasks = this.getTasksForWrite();
 		// 重新读取以避免与 update 写入的副本冲突
 		const idx = tasks.findIndex((t) => t.id === task.id);
 		if (idx !== -1 && next.repeat !== undefined) {
@@ -854,7 +917,7 @@ class TaskService {
 
 		const idSet = new Set(taskIds);
 		const now = Date.now();
-		const tasks = this.getAll();
+		const tasks = this.getTasksForWrite();
 		const blockedParentIds = updates.status === 'done'
 			? new Set(tasks
 				.filter((task) => idSet.has(task.id) && tasks.some((child) => child.parentTaskId === task.id && child.status !== 'done'))
@@ -923,7 +986,7 @@ class TaskService {
 		}
 
 		const idSet = new Set(taskIds);
-		const tasks = this.getAll();
+		const tasks = this.getTasksForWrite();
 		const next = tasks.filter((task) => !idSet.has(task.id));
 		const removed = tasks.length - next.length;
 
@@ -936,7 +999,7 @@ class TaskService {
 	}
 
 	private setArchived(taskId: string, archivedAt: number | undefined): Task | null {
-		const tasks = this.getAll();
+		const tasks = this.getTasksForWrite();
 		const index = tasks.findIndex((task) => task.id === taskId);
 		if (index === -1) {
 			return null;
@@ -959,7 +1022,7 @@ class TaskService {
 			return 0;
 		}
 
-		const tasks = this.getAll();
+		const tasks = this.getTasksForWrite();
 		const idSet = getArchiveCascadeIds(tasks, taskIds);
 		const now = Date.now();
 		let count = 0;
@@ -994,6 +1057,60 @@ class TaskService {
 		}
 	}
 
+	private getDocumentStore(): DocumentStore<Task> | null {
+		try {
+			const maybeWindow = window as Window & { utools?: UtoolsLike };
+			return maybeWindow.utools?.db === undefined ? null : createDocumentStore<Task>();
+		} catch {
+			return null;
+		}
+	}
+
+	private getTasksForWrite(): Task[] {
+		if (this.getDocumentStore() && this.nativeTaskBaseline.size > 0) {
+			return this.memoryTasks.map(cloneTask);
+		}
+		return this.getAll();
+	}
+
+	private getTaskDocumentId(taskId: string): string {
+		return `${this.taskDocumentPrefix}${taskId}`;
+	}
+
+	private readNativeTasks(documentStore: DocumentStore<Task>): Task[] {
+		const tasks: Task[] = [];
+		const baseline = new Map<string, DocumentRecord<Task>>();
+		for (const document of documentStore.list(this.taskDocumentPrefix)) {
+			const task = toTask(document.data);
+			if (task !== null) {
+				tasks.push(task);
+				baseline.set(task.id, {
+					_id: document._id,
+					...(document._rev === undefined ? {} : { _rev: document._rev }),
+					data: cloneTask(task),
+				});
+			}
+		}
+		this.nativeTaskBaseline = baseline;
+		return tasks;
+	}
+
+	private readLegacyTasks(): Task[] {
+		const raw = this.readFromStorage();
+		if (raw === null) {
+			return [];
+		}
+		return migrateLegacySubtasks(parseTasks(raw)).tasks;
+	}
+
+	private clearLegacyTasks(): void {
+		try {
+			this.getDbStorage()?.removeItem?.(this.storageKey);
+		} catch {
+			// The migrated native documents remain authoritative if legacy cleanup fails.
+		}
+	}
+
 	private readFromStorage(): string | null {
 		return this.readStorage(this.storageKey);
 	}
@@ -1013,7 +1130,26 @@ class TaskService {
 	}
 
 	private readBackup(): TaskBackup | null {
-		const raw = this.readStorage(this.backupStorageKey);
+		let raw: string | null = null;
+		const localStorage = this.getLocalStorage();
+		if (localStorage) {
+			try {
+				raw = localStorage.getItem(this.backupStorageKey);
+			} catch {
+				// Continue with the legacy migration source below.
+			}
+		}
+		if (raw === null) {
+			const legacy = this.readStorage(this.backupStorageKey);
+			if (legacy !== null && localStorage) {
+				try {
+					localStorage.setItem(this.backupStorageKey, legacy);
+				} catch {
+					// Memory fallback below remains available.
+				}
+			}
+			raw = legacy ?? this.memoryBackup;
+		}
 		return raw === null ? null : parseTaskBackup(raw);
 	}
 
@@ -1024,20 +1160,32 @@ class TaskService {
 		});
 		this.memoryBackup = backup;
 
-		const dbStorage = this.getDbStorage();
-		if (!dbStorage) {
-			return;
-		}
-
+		const localStorage = this.getLocalStorage();
+		if (!localStorage) return;
 		try {
-			dbStorage.setItem(this.backupStorageKey, backup);
+			localStorage.setItem(this.backupStorageKey, backup);
 		} catch {
-			// Gracefully fall back to memory storage when dbStorage fails.
+			// Gracefully fall back to memory storage when localStorage fails.
+		}
+	}
+
+	private getLocalStorage(): Storage | null {
+		try {
+			return window.localStorage ?? null;
+		} catch {
+			return null;
 		}
 	}
 
 	private saveAll(tasks: Task[]): void {
-		this.memoryTasks = [...tasks];
+		const documentStore = this.getDocumentStore();
+		if (documentStore) {
+			this.saveNativeTasks(documentStore, tasks);
+			this.memoryTasks = tasks.map(cloneTask);
+			return;
+		}
+
+		this.memoryTasks = tasks.map(cloneTask);
 
 		const dbStorage = this.getDbStorage();
 		if (!dbStorage) {
@@ -1049,6 +1197,55 @@ class TaskService {
 		} catch {
 			// Gracefully fall back to memory storage when dbStorage fails.
 		}
+	}
+
+	private saveNativeTasks(documentStore: DocumentStore<Task>, tasks: Task[]): void {
+		const nextById = new Map(tasks.map((task) => [task.id, task]));
+		const nextBaseline = new Map<string, DocumentRecord<Task>>();
+		for (const task of tasks) {
+			const baseline = this.nativeTaskBaseline.get(task.id);
+			if (baseline !== undefined && this.tasksEqual(baseline.data, task)) {
+				nextBaseline.set(task.id, {
+					_id: baseline._id,
+					...(baseline._rev === undefined ? {} : { _rev: baseline._rev }),
+					data: cloneTask(task),
+				});
+				continue;
+			}
+
+			const result = documentStore.write({
+				_id: this.getTaskDocumentId(task.id),
+				...(baseline?._rev === undefined ? {} : { _rev: baseline._rev }),
+				data: cloneTask(task),
+			});
+			if (result.status !== 'ok') {
+				throw new TaskDocumentWriteError(result);
+			}
+			nextBaseline.set(task.id, {
+				_id: this.getTaskDocumentId(task.id),
+				...(result.rev === undefined ? {} : { _rev: result.rev }),
+				data: cloneTask(task),
+			});
+		}
+
+		for (const [taskId, baseline] of this.nativeTaskBaseline) {
+			if (nextById.has(taskId)) {
+				continue;
+			}
+			const result = documentStore.remove({
+				_id: baseline._id,
+				...(baseline._rev === undefined ? {} : { _rev: baseline._rev }),
+			});
+			if (result.status !== 'ok') {
+				throw new TaskDocumentWriteError(result);
+			}
+		}
+
+		this.nativeTaskBaseline = nextBaseline;
+	}
+
+	private tasksEqual(first: Task, second: Task): boolean {
+		return JSON.stringify(first) === JSON.stringify(second);
 	}
 
 }

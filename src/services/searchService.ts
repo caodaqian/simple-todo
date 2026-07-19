@@ -116,6 +116,11 @@ const matchesKeyword = (task: Task, keyword: string): boolean => {
 	return title.includes(normalizedKeyword) || description.includes(normalizedKeyword);
 };
 
+const matchesTitleKeyword = (task: Task, keyword: string): boolean => {
+	const normalizedKeyword = normalizeText(keyword);
+	return !normalizedKeyword || normalizeText(task.title).includes(normalizedKeyword);
+};
+
 const matchesTags = (task: Task, tags: string[], mode: TagMatchMode): boolean => {
 	if (tags.length === 0) {
 		return true;
@@ -175,6 +180,7 @@ const compareBySortOption = (left: Task, right: Task, option: TaskSortOption): n
 export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[] => {
 	const {
 		keyword,
+		titleKeyword,
 		tags = [],
 		tagMatchMode = DEFAULT_TAG_MATCH_MODE,
 		group,
@@ -204,6 +210,10 @@ export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[
 		}
 
 		if (keyword && !matchesKeyword(task, keyword)) {
+			return false;
+		}
+
+		if (titleKeyword && !matchesTitleKeyword(task, titleKeyword)) {
 			return false;
 		}
 

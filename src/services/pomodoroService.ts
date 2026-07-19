@@ -123,10 +123,10 @@ class PomodoroService {
 
 	stop(): void {
 		this.memorySession = null;
-		const dbStorage = this.getDbStorage();
-		if (!dbStorage) return;
+		const localStorage = this.getLocalStorage();
+		if (!localStorage) return;
 		try {
-			dbStorage.removeItem(this.storageKey);
+			localStorage.removeItem(this.storageKey);
 		} catch {
 			// Ignore storage cleanup failures.
 		}
@@ -188,12 +188,12 @@ class PomodoroService {
 
 	private saveSession(session: PomodoroSession): void {
 		this.memorySession = { ...session };
-		const dbStorage = this.getDbStorage();
-		if (!dbStorage) return;
+		const localStorage = this.getLocalStorage();
+		if (!localStorage) return;
 		try {
-			dbStorage.setItem(this.storageKey, JSON.stringify(session));
+			localStorage.setItem(this.storageKey, JSON.stringify(session));
 		} catch {
-			// Gracefully keep memory state when dbStorage fails.
+			// Gracefully keep memory state when localStorage fails.
 		}
 	}
 
@@ -220,8 +220,34 @@ class PomodoroService {
 		}
 	}
 
+	private getLocalStorage(): Storage | null {
+		try {
+			return window.localStorage ?? null;
+		} catch {
+			return null;
+		}
+	}
+
 	private readFromStorage(): { kind: 'unavailable' } | { kind: 'available'; raw: string | null } {
-		return this.readRaw(this.storageKey);
+		const localStorage = this.getLocalStorage();
+		if (!localStorage) return { kind: 'unavailable' };
+		try {
+			const localValue = localStorage.getItem(this.storageKey);
+			if (localValue !== null) return { kind: 'available', raw: localValue };
+		} catch {
+			return { kind: 'unavailable' };
+		}
+
+		const dbStorage = this.getDbStorage();
+		if (!dbStorage) return { kind: 'available', raw: null };
+		try {
+			const legacyValue = dbStorage.getItem(this.storageKey);
+			if (typeof legacyValue !== 'string') return { kind: 'available', raw: null };
+			localStorage.setItem(this.storageKey, legacyValue);
+			return { kind: 'available', raw: legacyValue };
+		} catch {
+			return { kind: 'available', raw: null };
+		}
 	}
 
 	private readRaw(key: string): { kind: 'unavailable' } | { kind: 'available'; raw: string | null } {

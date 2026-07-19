@@ -63,6 +63,14 @@ export interface Task {
 	archivedAt?: number;
 }
 
+export interface TaskTemplateChild {
+	title: string;
+	priority: TaskPriority;
+	tags: string[];
+	group: string;
+	description: string;
+}
+
 export interface TaskTemplate {
 	id: string;
 	name: string;
@@ -71,11 +79,14 @@ export interface TaskTemplate {
 	tags: string[];
 	group: string;
 	description: string;
-	/** 模板套用时创建为完整子任务的标题列表。 */
+	/** 模板套用时创建的直接子任务内容。 */
+	childTasks: TaskTemplateChild[];
+	/** @deprecated 使用 childTasks；保留以读取历史模板。 */
 	children?: string[];
 	/** @deprecated 使用 children；保留以读取历史模板。 */
 	subtasks: Subtask[];
 	reminderOffset?: number;
+	/** @deprecated 模板不再保存或套用重复规则；仅保留旧调用方类型兼容。 */
 	repeat?: RepeatRule;
 	createdAt: number;
 	updatedAt: number;
@@ -133,6 +144,8 @@ export type TagMatchMode = 'any' | 'all';
 
 export interface TaskSearchFilter {
 	keyword?: string;
+	/** 仅匹配任务标题。 */
+	titleKeyword?: string;
 	tags?: string[];
 	tagMatchMode?: TagMatchMode;
 	group?: string;

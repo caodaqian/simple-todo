@@ -38,9 +38,12 @@ const makeTask = (overrides: Partial<Task> = {}): Task => ({
 
 describe('pomodoroService', () => {
 	const dbStorage = new MockDbStorage();
+	const localStorage = new MockDbStorage();
 
 	beforeEach(() => {
 		dbStorage.clear();
+		localStorage.clear();
+		Reflect.set(window, 'localStorage', localStorage);
 		window.utools = { ...(window.utools ?? {}), dbStorage } as typeof window.utools;
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-07-05T10:00:00+08:00'));
@@ -59,6 +62,21 @@ describe('pomodoroService', () => {
 		expect(session.status).toBe('running');
 		expect(session.endsAt - session.startedAt).toBe(40 * 60 * 1000);
 		expect(pomodoroService.getSession()).toEqual(session);
+	});
+
+	it('copies a legacy current session locally while keeping history in dbStorage', () => {
+		const legacy = {
+			id: 'legacy-session', taskId: 'task-legacy', taskTitle: '旧会话',
+			startedAt: 1, durationMinutes: 25, endsAt: 1_500_001, status: 'running',
+		};
+		dbStorage.setItem('jianyue.pomodoro', JSON.stringify(legacy));
+
+		expect(pomodoroService.getSession()).toMatchObject(legacy);
+		expect(localStorage.getItem('jianyue.pomodoro')).toBe(JSON.stringify(legacy));
+
+		pomodoroService.stop();
+		expect(localStorage.getItem('jianyue.pomodoro')).toBeNull();
+		expect(dbStorage.getItem('jianyue.pomodoro')).toBe(JSON.stringify(legacy));
 	});
 
 	it('starts a pomodoro session for a subtask with parent task snapshot', () => {
