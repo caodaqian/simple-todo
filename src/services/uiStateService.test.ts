@@ -25,10 +25,9 @@ class MockDbStorage {
 }
 
 const STORAGE_KEY = 'jianyue.uiState';
-const localStorage = new MockDbStorage();
 
 const writeStored = (state: Record<string, unknown>): void => {
-	localStorage.setItem(
+	(window as unknown as { utools: { dbStorage: MockDbStorage } }).utools.dbStorage.setItem(
 		STORAGE_KEY,
 		JSON.stringify(state),
 	);
@@ -39,8 +38,6 @@ describe('uiStateService', () => {
 
 	beforeEach(() => {
 		dbStorage.clear();
-		localStorage.clear();
-		Reflect.set(window, 'localStorage', localStorage);
 		window.utools = { ...(window.utools ?? {}), dbStorage };
 		uiStateService.saveUiState(DEFAULT_UI_STATE);
 	});
@@ -80,25 +77,6 @@ describe('uiStateService', () => {
 		expect(restored).toEqual(state);
 		expect(restored.activeFilter).toEqual(filter);
 		expect(restored.activeSort).toEqual(sort);
-	});
-
-	it('copies legacy state once to localStorage and subsequently writes only locally', () => {
-		const legacy: UiState = {
-			currentView: 'kanban',
-			activeSection: 'today',
-			activeFilter: { tags: ['legacy'] },
-			activeSort: { field: 'createdAt', order: 'asc' },
-		};
-		dbStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
-		localStorage.removeItem(STORAGE_KEY);
-
-		expect(uiStateService.getUiState()).toEqual(legacy);
-		expect(localStorage.getItem(STORAGE_KEY)).toBe(JSON.stringify(legacy));
-
-		const next: UiState = { ...legacy, currentView: 'calendar' };
-		uiStateService.saveUiState(next);
-		expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '')).toMatchObject(next);
-		expect(dbStorage.getItem(STORAGE_KEY)).toBe(JSON.stringify(legacy));
 	});
 
 	it('falls back currentView to list when invalid', () => {

@@ -1,5 +1,3 @@
-import type { Task } from '../types/task';
-import { getTaskDateRules, isTaskDueToday, isTaskOverdue } from './searchService';
 import { settingsService } from './settingsService';
 
 interface UtoolsNotification {
@@ -38,16 +36,4 @@ export const notify = (title: string, body: string): void => {
 	}
 };
 
-export const summarizeOnEnter = (tasks: Task[]): void => {
-	const rules = getTaskDateRules();
-	const todayCount = tasks.filter((task) => task.status !== 'done' && isTaskDueToday(task, rules)).length;
-	const overdueCount = tasks.filter((task) => isTaskOverdue(task, rules)).length;
-
-	if (todayCount === 0 && overdueCount === 0) {
-		return;
-	}
-
-	notify('简悦清单', `今天 ${todayCount} 项 · 已过期 ${overdueCount} 项`);
-};
-
-export const notifyService = { notify, summarizeOnEnter };
+export const notifyService = { notify };

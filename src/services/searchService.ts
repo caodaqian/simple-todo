@@ -45,7 +45,9 @@ const isActiveTask = (task: Task): boolean => task.status !== 'done';
 
 export const isTaskDueToday = (task: Task, rules: TaskDateRules): boolean => {
 	const deadline = getTaskDeadline(task);
-	return deadline !== undefined && deadline >= rules.startOfToday && deadline <= rules.endOfToday;
+	const start = getTaskStart(task) ?? deadline;
+	const end = getTaskEnd(task) ?? deadline;
+	return start !== undefined && end !== undefined && end >= rules.startOfToday && start <= rules.endOfToday;
 };
 
 export const isTaskInRecentDays = (task: Task, rules: TaskDateRules): boolean => {
@@ -55,7 +57,7 @@ export const isTaskInRecentDays = (task: Task, rules: TaskDateRules): boolean =>
 
 export const isTaskOverdue = (task: Task, rules: TaskDateRules): boolean => {
 	const end = getTaskEnd(task);
-	return isActiveTask(task) && end !== undefined && end < rules.startOfToday;
+	return isActiveTask(task) && end !== undefined && end < rules.now;
 };
 
 export const isTaskUrgent = (task: Task, rules: TaskDateRules): boolean => {
@@ -185,6 +187,7 @@ export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[
 		tagMatchMode = DEFAULT_TAG_MATCH_MODE,
 		group,
 		dateRange,
+		overdueOnly,
 		status,
 		priority,
 		showCompleted = false,
@@ -194,6 +197,7 @@ export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[
 	const normalizedGroup = group ? normalizeText(group) : '';
 	const statusSet = normalizeStatuses(status);
 	const prioritySet = normalizePriorities(priority);
+	const dateRules = getTaskDateRules();
 
 	// Default behavior hides archived tasks. Archived views opt in with archived=true.
 	const source = tasks.filter((task) => {
@@ -226,6 +230,10 @@ export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[
 		}
 
 		if (dateRange && !isInDateRange(task, dateRange)) {
+			return false;
+		}
+
+		if (overdueOnly && !isTaskOverdue(task, dateRules)) {
 			return false;
 		}
 

@@ -4,11 +4,10 @@ import { useCompletionBlockedModal } from '../composables/useCompletionBlockedMo
 import { useImeGuard } from '../composables/useImeGuard';
 import { getNextTaskStatus } from '../composables/useTaskQuickActions';
 import { renderMarkdown } from '../services/markdownService';
-import { notify } from '../services/notifyService';
 import { taskService, type AddSubtaskOverrides } from '../services/taskService';
 import { templateService } from '../services/templateService';
 import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus } from '../types/task';
-import { getTaskDeadline, getTaskStart, normalizeDateRange } from '../types/task';
+import { getTaskDeadline, getTaskStart, normalizeAllDayDateRange, normalizeDateRange } from '../types/task';
 import AppIcon from './AppIcon.vue';
 import PomodoroStartButton from './PomodoroStartButton.vue';
 import SmartTaskInput from './SmartTaskInput.vue';
@@ -232,9 +231,8 @@ import TaskQuickActions from './TaskQuickActions.vue';
     const task = currentTask.value;
     const name = templateNameDraft.value.trim();
     if (!task || task.parentTaskId || !name) return;
-    const template = templateService.createFromTask(name, task, taskService.getChildTasks(task.id));
+    templateService.createFromTask(name, task, taskService.getChildTasks(task.id));
     templateSaveVisible.value = false;
-    notify('模板保存成功', `“${template.name}”已保存`);
   };
 
   // 截止时间摘要展示在 hero
@@ -356,6 +354,15 @@ import TaskQuickActions from './TaskQuickActions.vue';
     if (boundary === 'start') startInputValue.value = value;
     else endInputValue.value = value;
     normalizeDueRange();
+  };
+
+  const openNativeDatePicker = (event: MouseEvent): void => {
+    const input = event.currentTarget as HTMLInputElement & { showPicker?: () => void };
+    try {
+      input.showPicker?.();
+    } catch {
+      // 保留浏览器原生点击行为。
+    }
   };
 
   // 切换全天时同步默认时间值
@@ -823,6 +830,16 @@ import TaskQuickActions from './TaskQuickActions.vue';
     openTaskInEditor(parentTask.value);
   };
 
+  const hasUnchangedAllDaySchedule = (task: Task, formValue: TaskEditorForm): boolean => {
+    if (!task.allDay || !formValue.allDay || !formValue.hasDue) return false;
+    const deadline = getTaskDeadline(task);
+    const start = getTaskStart(task);
+    if (deadline === undefined || formValue.endDate !== formatDateInput(deadline)) return false;
+    const hasRange = start !== undefined && start !== deadline;
+    return formValue.hasEndDate === hasRange
+      && (!hasRange || formValue.startDate === formatDateInput(start));
+  };
+
   // ─── 构建保存 payload ──────────────────────────────
   function buildSavePayload(): SaveTaskInput {
     const f = form.value;
@@ -835,17 +852,24 @@ import TaskQuickActions from './TaskQuickActions.vue';
     let allDayFlag: boolean | undefined;
     if (f.hasDue && f.endDate) {
       allDayFlag = f.allDay;
-      const endTs = dateInputToTimestamp(f.endDate, f.allDay ? undefined : f.endTime);
-      dueEnd = Number.isNaN(endTs) ? undefined : endTs;
-      if (f.hasEndDate && f.startDate) {
-        const startTs = dateInputToTimestamp(f.startDate, f.allDay ? undefined : f.startTime);
-        if (!Number.isNaN(startTs)) {
-          dueStart = startTs;
+      if (task && hasUnchangedAllDaySchedule(task, f)) {
+        dueStart = task.dueStart;
+        dueEnd = getTaskDeadline(task);
+      } else {
+        const endTs = dateInputToTimestamp(f.endDate, f.allDay ? undefined : f.endTime);
+        dueEnd = Number.isNaN(endTs) ? undefined : endTs;
+        if (f.hasEndDate && f.startDate) {
+          const startTs = dateInputToTimestamp(f.startDate, f.allDay ? undefined : f.startTime);
+          if (!Number.isNaN(startTs)) {
+            dueStart = startTs;
+          }
         }
+        const normalized = f.allDay
+          ? normalizeAllDayDateRange(dueStart, dueEnd)
+          : normalizeDateRange(dueStart, dueEnd);
+        dueStart = normalized.dueStart;
+        dueEnd = normalized.dueEnd;
       }
-      const normalized = normalizeDateRange(dueStart, dueEnd);
-      dueStart = normalized.dueStart;
-      dueEnd = normalized.dueEnd;
     }
 
     let repeatRule: RepeatRule | undefined;
@@ -971,7 +995,6 @@ import TaskQuickActions from './TaskQuickActions.vue';
           ...(child.allDay === undefined ? {} : { allDay: child.allDay }),
         });
       }
-      notify('任务创建成功', `"${title}" 已创建`);
       emit('saved', saved);
       closeEditor();
     } catch (err) {
@@ -1187,6 +1210,7 @@ id="task-tag-input"
                         class="due-input"
                         aria-label="开始时间"
                         @input="updateDueInput('start', ($event.target as HTMLInputElement).value)"
+                        @click="openNativeDatePicker"
                       />
                     </div>
                   </div>
@@ -1204,6 +1228,7 @@ id="task-tag-input"
                       class="due-input"
                       aria-label="截止时间"
                       @input="updateDueInput('end', ($event.target as HTMLInputElement).value)"
+                      @click="openNativeDatePicker"
                     />
                   </div>
                   <button

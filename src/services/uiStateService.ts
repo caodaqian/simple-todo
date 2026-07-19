@@ -131,13 +131,13 @@ class UiStateService {
 
 	private readFromStorage(): string | null {
 		const localStorage = this.getLocalStorage();
-		if (!localStorage) return null;
-
-		try {
-			const localValue = localStorage.getItem(this.storageKey);
-			if (localValue !== null) return localValue;
-		} catch {
-			return null;
+		if (localStorage) {
+			try {
+				const localValue = localStorage.getItem(this.storageKey);
+				if (localValue !== null) return localValue;
+			} catch {
+				// 本地存储不可访问时继续回退到 uTools dbStorage。
+			}
 		}
 
 		const dbStorage = this.getDbStorage();
@@ -148,7 +148,7 @@ class UiStateService {
 		try {
 			const value = dbStorage.getItem(this.storageKey);
 			if (typeof value !== 'string') return null;
-			localStorage.setItem(this.storageKey, value);
+			localStorage?.setItem(this.storageKey, value);
 			return value;
 		} catch {
 			return null;

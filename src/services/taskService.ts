@@ -9,7 +9,7 @@ import type {
 	TaskStatus,
 	UpdateTaskInput,
 } from '../types/task';
-import { normalizeDateRange } from '../types/task';
+import { isLocalDayStart, normalizeAllDayDateRange, normalizeDateRange } from '../types/task';
 import {
 	createDocumentStore,
 	type DocumentRecord,
@@ -297,6 +297,23 @@ const cloneTask = (task: Task): Task => ({
 	subtasks: cloneSubtasks(task.subtasks),
 });
 
+const migrateLegacyAllDayDeadlines = (tasks: Task[]): { tasks: Task[]; migrated: boolean } => {
+	let migrated = false;
+	const nextTasks = tasks.map((task) => {
+		if (!task.allDay || task.dueEnd === undefined || !isLocalDayStart(task.dueEnd)) {
+			return task;
+		}
+		const normalized = normalizeAllDayDateRange(task.dueStart, task.dueEnd);
+		migrated = true;
+		return {
+			...cloneTask(task),
+			...(normalized.dueStart === undefined ? {} : { dueStart: normalized.dueStart }),
+			dueEnd: normalized.dueEnd!,
+		};
+	});
+	return { tasks: nextTasks, migrated };
+};
+
 const withArchivedState = (task: Task, archivedAt: number | undefined, now: number): Task => {
 	const next: Task = {
 		...task,
@@ -427,10 +444,15 @@ const toSavePayload = (input: SaveTaskInput, now: number, existing?: Task): Task
 		createdAt: existing?.createdAt ?? input.createdAt ?? now,
 		updatedAt: existing ? now : input.updatedAt ?? now,
 	};
-	const normalizedSaveRange = normalizeDateRange(
+	let normalizedSaveRange = normalizeDateRange(
 		dueStart !== undefined ? dueStart : undefined,
 		dueEnd !== undefined ? dueEnd : (dueDate !== undefined ? dueDate : undefined),
 	);
+	const inputHasDueBoundary = hasOwn(input, 'dueDate') || hasOwn(input, 'dueStart') || hasOwn(input, 'dueEnd');
+	const switchedToAllDay = hasOwn(input, 'allDay') && input.allDay === true && existing?.allDay !== true;
+	if (allDay === true && (existing === undefined || inputHasDueBoundary || switchedToAllDay)) {
+		normalizedSaveRange = normalizeAllDayDateRange(normalizedSaveRange.dueStart, normalizedSaveRange.dueEnd);
+	}
 	if (normalizedSaveRange.dueStart !== undefined) payload.dueStart = normalizedSaveRange.dueStart;
 	if (normalizedSaveRange.dueEnd !== undefined) payload.dueEnd = normalizedSaveRange.dueEnd;
 	if (allDay !== undefined) payload.allDay = allDay;
@@ -486,9 +508,13 @@ class TaskService {
 				this.clearLegacyTasks();
 			}
 
-			const migratedTasks = this.readNativeTasks(documentStore);
-			this.memoryTasks = migratedTasks;
-			return [...migratedTasks];
+			const nativeTasks = this.readNativeTasks(documentStore);
+			const migration = migrateLegacyAllDayDeadlines(nativeTasks);
+			this.memoryTasks = migration.tasks;
+			if (migration.migrated) {
+				this.saveAll(migration.tasks);
+			}
+			return [...migration.tasks];
 		}
 
 		this.nativeTaskBaseline.clear();
@@ -502,9 +528,10 @@ class TaskService {
 			return [...migration.tasks];
 		}
 
-		const migration = migrateLegacySubtasks(parseTasks(raw));
+		const allDayMigration = migrateLegacyAllDayDeadlines(parseTasks(raw));
+		const migration = migrateLegacySubtasks(allDayMigration.tasks);
 		this.memoryTasks = migration.tasks;
-		if (migration.migrated) {
+		if (allDayMigration.migrated || migration.migrated) {
 			this.saveAll(migration.tasks);
 		}
 		return [...migration.tasks];
@@ -642,17 +669,8 @@ class TaskService {
 		const updatesHasStart = hasOwn(updates, 'dueStart');
 		const updatesHasEnd = hasOwn(updates, 'dueEnd');
 		const updatesHasDate = hasOwn(updates, 'dueDate');
-		let normalizedUpdateRange: { dueStart?: number; dueEnd?: number };
-		if (!updatesHasStart && !updatesHasEnd && !updatesHasDate) {
-			const fallback = normalizeDateRange(
-				current.dueStart !== undefined ? current.dueStart : undefined,
-				current.dueEnd !== undefined ? current.dueEnd : (current.dueDate !== undefined ? current.dueDate : undefined),
-			);
-			normalizedUpdateRange = {
-				...(fallback.dueStart !== undefined ? { dueStart: fallback.dueStart } : {}),
-				...(fallback.dueEnd !== undefined ? { dueEnd: fallback.dueEnd } : {}),
-			};
-		} else {
+		let normalizedUpdateRange: { dueStart?: number; dueEnd?: number } = {};
+		if (updatesHasStart || updatesHasEnd || updatesHasDate) {
 			const startSource = updatesHasStart ? updates.dueStart : current.dueStart;
 			const endSource = updatesHasEnd ? updates.dueEnd : (updatesHasDate ? updates.dueDate : current.dueEnd);
 			normalizedUpdateRange = normalizeDateRange(
@@ -676,8 +694,12 @@ class TaskService {
 				: current.parentTaskId === undefined
 					? {}
 					: { parentTaskId: current.parentTaskId }),
-			...(normalizedUpdateRange.dueStart !== undefined ? { dueStart: normalizedUpdateRange.dueStart } : {}),
-			...(normalizedUpdateRange.dueEnd !== undefined ? { dueEnd: normalizedUpdateRange.dueEnd } : {}),
+			...(updatesHasStart || updatesHasEnd || updatesHasDate
+				? {
+					...(normalizedUpdateRange.dueStart !== undefined ? { dueStart: normalizedUpdateRange.dueStart } : {}),
+					...(normalizedUpdateRange.dueEnd !== undefined ? { dueEnd: normalizedUpdateRange.dueEnd } : {}),
+				}
+				: {}),
 			...(hasOwn(updates, 'allDay')
 				? { allDay: updates.allDay }
 				: current.allDay === undefined

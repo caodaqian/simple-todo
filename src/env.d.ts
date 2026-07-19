@@ -23,12 +23,10 @@ interface UtoolsDbDocument {
 	[key: string]: unknown;
 }
 
-type UtoolsDbResultName = 'conflict' | 'not_found';
-
 interface UtoolsDbResult {
 	ok?: boolean;
 	error?: boolean;
-	name?: UtoolsDbResultName;
+	name?: string;
 	message?: string;
 	id?: string;
 	rev?: string;

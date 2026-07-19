@@ -55,6 +55,7 @@ export const isTaskSearchFilter = (value: unknown): value is TaskSearchFilter =>
 		if (!isObjectRecord(dr)) return false;
 		if (!isNumberOrUndefined(dr.start) || !isNumberOrUndefined(dr.end)) return false;
 	}
+	if (value.overdueOnly !== undefined && typeof value.overdueOnly !== 'boolean') return false;
 
 	if (value.status !== undefined) {
 		if (Array.isArray(value.status)) {
@@ -120,6 +121,7 @@ export const countActiveFilterFields = (filter: TaskSearchFilter | undefined): n
 	if (filter.tagMatchMode) count += 1;
 	if (filter.group && filter.group.trim().length > 0) count += 1;
 	if (filter.dateRange && (filter.dateRange.start !== undefined || filter.dateRange.end !== undefined)) count += 1;
+	if (filter.overdueOnly !== undefined) count += 1;
 	if (filter.status !== undefined) count += 1;
 	if (filter.priority !== undefined) count += 1;
 	if (filter.showCompleted !== undefined) count += 1;

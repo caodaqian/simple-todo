@@ -39,7 +39,7 @@ describe('stickyNoteService', () => {
 			title: '今天',
 			view: 'kanban',
 			section: 'today',
-			filter: { status: ['todo', 'doing'], tags: ['work'] },
+			filter: { status: ['todo', 'doing'], tags: ['work'], overdueOnly: true },
 			sort: { field: 'priority', order: 'desc' },
 		});
 
@@ -49,6 +49,7 @@ describe('stickyNoteService', () => {
 		expect(restored.title).toBe('今天');
 		expect(restored.view).toBe('kanban');
 		expect(restored.filter.tags).toEqual(['work']);
+		expect(restored.filter.overdueOnly).toBe(true);
 		expect(restored.sort).toEqual({ field: 'priority', order: 'desc' });
 	});
 

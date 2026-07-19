@@ -79,14 +79,13 @@ export interface TaskTemplate {
 	tags: string[];
 	group: string;
 	description: string;
-	/** 模板套用时创建的直接子任务内容。 */
-	childTasks: TaskTemplateChild[];
-	/** @deprecated 使用 childTasks；保留以读取历史模板。 */
+	/** 模板套用时创建为完整子任务的标题列表。 */
 	children?: string[];
 	/** @deprecated 使用 children；保留以读取历史模板。 */
 	subtasks: Subtask[];
+	/** 模板套用时创建的完整子任务定义。 */
+	childTasks: TaskTemplateChild[];
 	reminderOffset?: number;
-	/** @deprecated 模板不再保存或套用重复规则；仅保留旧调用方类型兼容。 */
 	repeat?: RepeatRule;
 	createdAt: number;
 	updatedAt: number;
@@ -150,6 +149,8 @@ export interface TaskSearchFilter {
 	tagMatchMode?: TagMatchMode;
 	group?: string;
 	dateRange?: TaskDateRange;
+	/** 仅显示结束/截止时间严格早于当前时刻的未完成任务。 */
+	overdueOnly?: boolean;
 	status?: TaskStatus | TaskStatus[];
 	priority?: TaskPriority | TaskPriority[];
 	showCompleted?: boolean;
@@ -205,6 +206,36 @@ export const normalizeDateRange = (
 	if (end === undefined) return { dueEnd: start };
 	if (start === end) return { dueEnd: start };
 	return start < end ? { dueStart: start, dueEnd: end } : { dueStart: end, dueEnd: start };
+};
+
+export const isLocalDayStart = (timestamp: number): boolean => {
+	const date = new Date(timestamp);
+	return date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0 && date.getMilliseconds() === 0;
+};
+
+const toLocalDayStart = (timestamp: number): number => {
+	const date = new Date(timestamp);
+	date.setHours(0, 0, 0, 0);
+	return date.getTime();
+};
+
+const toLocalDayEnd = (timestamp: number): number => {
+	const date = new Date(timestamp);
+	date.setHours(23, 59, 59, 999);
+	return date.getTime();
+};
+
+/** 将全天任务的日期边界规范为开始日零点、结束日最后一毫秒。 */
+export const normalizeAllDayDateRange = (
+	start: number | undefined,
+	end: number | undefined,
+): { dueStart?: number; dueEnd?: number } => {
+	const normalized = normalizeDateRange(start, end);
+	if (normalized.dueEnd === undefined) return normalized;
+	const dueEnd = toLocalDayEnd(normalized.dueEnd);
+	if (normalized.dueStart === undefined) return { dueEnd };
+	const dueStart = toLocalDayStart(normalized.dueStart);
+	return dueStart === toLocalDayStart(dueEnd) ? { dueEnd } : { dueStart, dueEnd };
 };
 
 export interface CountedValue {

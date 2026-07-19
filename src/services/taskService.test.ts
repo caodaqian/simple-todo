@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import packageJson from '../../package.json';
 import type { Task, UpdateTaskInput } from '../types/task';
 import { getTaskDeadline } from '../types/task';
+import { getTaskDateRules, isTaskOverdue } from './searchService';
 import { STORAGE_KEYS } from './storageKeys';
 import { taskService } from './taskService';
 
@@ -583,7 +584,7 @@ describe('taskService', () => {
 			priority: 'low',
 			tags: ['personal'],
 			group: 'inbox',
-			dueEnd: 10_000,
+			dueEnd: new Date(1970, 0, 1, 23, 59, 59, 999).getTime(),
 			allDay: true,
 		});
 	});
@@ -963,4 +964,59 @@ describe('unified time range semantics', () => {
     expect(tasks[0]).not.toHaveProperty('dueDate');
     expect(tasks[0]?.dueEnd).toBe(4242);
   });
+
+	it('normalizes all-day deadlines to local day boundaries and preserves precise endpoints', () => {
+		const today = new Date(2026, 6, 19);
+		const tomorrow = new Date(2026, 6, 20);
+		const noon = new Date(2026, 6, 19, 12).getTime();
+		const todayStart = today.getTime();
+		const todayEnd = new Date(2026, 6, 19, 23, 59, 59, 999).getTime();
+		const tomorrowEnd = new Date(2026, 6, 20, 23, 59, 59, 999).getTime();
+
+		dbStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify([
+			createTaskFixture({ id: 'all-day-single', allDay: true, dueEnd: todayStart }),
+			createTaskFixture({ id: 'all-day-range', allDay: true, dueStart: todayStart, dueEnd: tomorrow.getTime() }),
+			createTaskFixture({ id: 'all-day-precise', allDay: true, dueEnd: noon }),
+			createTaskFixture({ id: 'timed-midnight', dueEnd: todayStart }),
+		]));
+
+		const tasks = taskService.getAll();
+
+		expect(tasks.find((task) => task.id === 'all-day-single')?.dueEnd).toBe(todayEnd);
+		expect(tasks.find((task) => task.id === 'all-day-range')).toMatchObject({
+			dueStart: todayStart,
+			dueEnd: tomorrowEnd,
+		});
+		expect(tasks.find((task) => task.id === 'all-day-precise')?.dueEnd).toBe(noon);
+		expect(tasks.find((task) => task.id === 'timed-midnight')?.dueEnd).toBe(todayStart);
+		expect(isTaskOverdue(tasks.find((task) => task.id === 'all-day-single')!, getTaskDateRules(noon))).toBe(false);
+
+		const saved = JSON.parse(dbStorage.getItem<string>(STORAGE_KEYS.TASKS));
+		expect(saved.find((task: Task) => task.id === 'all-day-single')?.dueEnd).toBe(todayEnd);
+	});
+
+	it('uses local day boundaries when saving an all-day time range', () => {
+		const start = new Date(2026, 6, 19, 14).getTime();
+		const end = new Date(2026, 6, 20).getTime();
+
+		const created = taskService.create({
+			title: '全天时间段', status: 'todo', priority: 'medium', tags: [], group: '', description: '', subtasks: [],
+			allDay: true, dueStart: start, dueEnd: end,
+		});
+
+		expect(created).toMatchObject({
+			dueStart: new Date(2026, 6, 19).getTime(),
+			dueEnd: new Date(2026, 6, 20, 23, 59, 59, 999).getTime(),
+		});
+	});
+
+	it('preserves a precise all-day deadline when updating unrelated fields', () => {
+		const noon = new Date(2026, 6, 19, 12).getTime();
+		const task = createTaskFixture({ id: 'all-day-precise-update', allDay: true, dueEnd: noon });
+		taskService.replaceAll([task]);
+
+		const updated = taskService.update(task.id, { title: '仅更新标题' });
+
+		expect(updated).toMatchObject({ title: '仅更新标题', dueEnd: noon, allDay: true });
+	});
 });

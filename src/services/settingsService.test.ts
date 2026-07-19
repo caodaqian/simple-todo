@@ -169,6 +169,7 @@ describe('settingsService', () => {
 			status: ['todo', 'doing'],
 			showCompleted: true,
 			dateRange: { start: 1700000000000, end: 1800000000000 },
+			overdueOnly: true,
 		});
 		const snapshot = createViewSnapshot({
 			view: 'kanban',
