@@ -6,7 +6,7 @@ import { getNextTaskStatus } from '../composables/useTaskQuickActions';
 import { renderMarkdown } from '../services/markdownService';
 import { taskService, type AddSubtaskOverrides } from '../services/taskService';
 import { templateService } from '../services/templateService';
-import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus } from '../types/task';
+import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
 import { getTaskDeadline, getTaskStart, normalizeAllDayDateRange, normalizeDateRange } from '../types/task';
 import AppIcon from './AppIcon.vue';
 import PomodoroStartButton from './PomodoroStartButton.vue';
@@ -77,6 +77,11 @@ import TaskQuickActions from './TaskQuickActions.vue';
   const errorMessage = ref('');
   const templateSaveVisible = ref(false);
   const templateNameDraft = ref('');
+  const templateMenuVisible = ref(false);
+  const templateMenuRef = ref<HTMLElement | null>(null);
+  const templateMenuTriggerRef = ref<HTMLButtonElement | null>(null);
+  const templates = ref<TaskTemplate[]>([]);
+  const selectedTemplateId = ref('');
 
   // chip 输入相关
   const tagDraft = ref('');
@@ -223,6 +228,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
 
   const openTemplateSave = (): void => {
     if (!currentTask.value || currentTask.value.parentTaskId) return;
+    closeTemplateMenu();
     templateNameDraft.value = `${currentTask.value.title}模板`;
     templateSaveVisible.value = true;
   };
@@ -233,6 +239,87 @@ import TaskQuickActions from './TaskQuickActions.vue';
     if (!task || task.parentTaskId || !name) return;
     templateService.createFromTask(name, task, taskService.getChildTasks(task.id));
     templateSaveVisible.value = false;
+    templates.value = templateService.list();
+  };
+
+  const removeTemplateMenuListeners = (): void => {
+    document.removeEventListener('pointerdown', handleTemplateMenuOutsidePointer);
+    document.removeEventListener('keydown', handleTemplateMenuKeydown);
+  };
+
+  const closeTemplateMenu = (): void => {
+    templateMenuVisible.value = false;
+    removeTemplateMenuListeners();
+  };
+
+  const handleTemplateMenuOutsidePointer = (event: PointerEvent): void => {
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    if (templateMenuRef.value?.contains(target) || templateMenuTriggerRef.value?.contains(target)) return;
+    closeTemplateMenu();
+  };
+
+  const handleTemplateMenuKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    closeTemplateMenu();
+    templateMenuTriggerRef.value?.focus();
+  };
+
+  const toggleTemplateMenu = async (): Promise<void> => {
+    if (templateMenuVisible.value) {
+      closeTemplateMenu();
+      return;
+    }
+    templates.value = templateService.list();
+    if (!selectedTemplateId.value || !templates.value.some((template) => template.id === selectedTemplateId.value)) {
+      selectedTemplateId.value = templates.value[0]?.id ?? '';
+    }
+    templateMenuVisible.value = true;
+    document.addEventListener('pointerdown', handleTemplateMenuOutsidePointer);
+    document.addEventListener('keydown', handleTemplateMenuKeydown);
+    await nextTick();
+    const focusTarget = templateMenuRef.value?.querySelector<HTMLElement>(
+      'select:not(:disabled), button:not(:disabled)',
+    ) ?? templateMenuRef.value;
+    focusTarget?.focus();
+  };
+
+  const applySelectedTemplate = (): void => {
+    if (!selectedTemplateId.value) return;
+    try {
+      const draft = templateService.buildDraft(selectedTemplateId.value);
+      form.value.title = draft.task.title;
+      form.value.priority = draft.task.priority;
+      form.value.group = draft.task.group;
+      form.value.tags = [...draft.task.tags];
+      form.value.description = draft.task.description;
+      form.value.reminderOffset = draft.task.reminderOffset ?? null;
+      const task = currentTask.value;
+      if (task) {
+        for (const child of draft.children) {
+          taskService.saveTask({
+            ...child,
+            status: 'todo',
+            subtasks: [],
+            parentTaskId: task.id,
+          });
+        }
+        subtasks.value = taskService.getChildTasks(task.id);
+      } else {
+        subtasks.value = draft.children.map((child) => makeLocalSubtask(child.title, {
+          priority: child.priority,
+          tags: [...child.tags],
+          group: child.group,
+        }, child.description));
+      }
+      closeTemplateMenu();
+      void nextTick(() => {
+        document.querySelector<HTMLInputElement>('#task-editor-title-input')?.focus();
+      });
+    } catch {
+      errorMessage.value = '模板不存在或已被删除';
+    }
   };
 
   // 截止时间摘要展示在 hero
@@ -548,6 +635,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
     currentTask.value = task;
     templateSaveVisible.value = false;
     templateNameDraft.value = '';
+    closeTemplateMenu();
 
     if (task) {
       parentTask.value = taskService.getParentTask(task);
@@ -651,6 +739,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
   }
 
   const closeEditor = (): void => {
+    closeTemplateMenu();
     emit('update:modelValue', false);
   };
 
@@ -952,6 +1041,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
   );
 
   onBeforeUnmount(() => {
+    removeTemplateMenuListeners();
     if (autoSaveTimer) {
       clearTimeout(autoSaveTimer);
       autoSaveTimer = null;
@@ -1035,14 +1125,12 @@ import TaskQuickActions from './TaskQuickActions.vue';
       <dialog open class="task-editor" aria-label="任务编辑器">
         <header class="task-editor-header">
           <div class="task-editor-heading">
-            <p class="task-editor-kicker">任务详情</p>
-            <h2>{{ isEditMode ? '编辑任务' : '新建任务' }}</h2>
-            <p v-if="isEditMode" class="task-editor-subtitle">编辑后自动保存</p>
+            <div class="task-editor-heading-row">
+              <h2>{{ isEditMode ? '编辑任务' : '新建任务' }}</h2>
+              <span v-if="isEditMode" class="task-editor-subtitle">自动保存</span>
+            </div>
           </div>
           <div class="task-editor-actions">
-            <button v-if="isEditMode && !isChildTask" type="button" class="btn btn-ghost" @click="openTemplateSave">
-              保存为模板
-            </button>
             <button type="button" class="btn btn-ghost btn-icon" title="关闭" aria-label="关闭" @click="closeEditor">
               <AppIcon name="x" :size="18" />
             </button>
@@ -1050,66 +1138,157 @@ import TaskQuickActions from './TaskQuickActions.vue';
         </header>
 
         <div class="task-editor-body">
-          <section class="editor-hero-column">
-            <div class="hero-panel">
+          <section class="editor-main-column">
+            <section class="title-workspace">
               <div class="hero-meta-row">
-                <span class="meta-pill" :class="`status-${form.status}`">
-                  {{ statusOptions.find((item) => item.value === form.status)?.label }}
-                </span>
-                <span class="meta-separator"></span>
-                <span class="meta-pill" :class="`priority-${form.priority}`">
-                  {{ priorityOptions.find((item) => item.value === form.priority)?.label }}优先级
-                </span>
-                <template v-if="dueSummary">
+                <div class="hero-meta-summary">
+                  <span class="meta-pill" :class="`status-${form.status}`">
+                    {{ statusOptions.find((item) => item.value === form.status)?.label }}
+                  </span>
                   <span class="meta-separator"></span>
-                  <span class="meta-text meta-due">{{ dueSummary }}</span>
-                </template>
-                <template v-if="parentTask">
-                  <span class="meta-separator"></span>
-                  <button type="button" class="parent-task-link" @click="openParentTask">
-                    属于：{{ parentTask.title }}
-                  </button>
-                </template>
+                  <span class="meta-pill" :class="`priority-${form.priority}`">
+                    {{ priorityOptions.find((item) => item.value === form.priority)?.label }}优先级
+                  </span>
+                  <template v-if="dueSummary">
+                    <span class="meta-separator"></span>
+                    <span class="meta-text meta-due">{{ dueSummary }}</span>
+                  </template>
+                  <template v-if="parentTask">
+                    <span class="meta-separator"></span>
+                    <button type="button" class="parent-task-link" @click="openParentTask">
+                      属于：{{ parentTask.title }}
+                    </button>
+                  </template>
+                </div>
+
+                <div class="title-workspace-actions">
+                  <TaskQuickActions
+                    :task="quickActionTask"
+                    :show-more="isEditMode"
+                    :allow-delete="isEditMode"
+                    popover-z-index="var(--z-dialog)"
+                    @cycle-status="handleMainStatusCycle"
+                    @set-priority="(_, priority) => handleMainPriorityChange(priority)"
+                    @toggle-archive="handleMainArchive"
+                    @delete="handleMainDelete"
+                  />
+                  <div class="template-menu-anchor">
+                    <button
+                      ref="templateMenuTriggerRef"
+                      type="button"
+                      class="template-menu-trigger"
+                      data-testid="template-menu-trigger"
+                      aria-haspopup="dialog"
+                      aria-controls="task-template-popover"
+                      :aria-expanded="templateMenuVisible"
+                      @click.stop="toggleTemplateMenu"
+                    >模板</button>
+                    <div
+                      v-if="templateMenuVisible"
+                      id="task-template-popover"
+                      ref="templateMenuRef"
+                      class="template-menu"
+                      data-testid="template-menu"
+                      tabindex="-1"
+                      role="dialog"
+                      aria-label="任务模板"
+                      aria-modal="false"
+                      @click.stop
+                    >
+                      <label class="field-block">
+                        <span class="field-label">套用模板</span>
+                        <select v-model="selectedTemplateId" :disabled="templates.length === 0">
+                          <option value="">{{ templates.length === 0 ? '暂无模板' : '请选择模板' }}</option>
+                          <option v-for="template in templates" :key="template.id" :value="template.id">
+                            {{ template.name }}
+                          </option>
+                        </select>
+                      </label>
+                      <button type="button" class="btn btn-primary" :disabled="!selectedTemplateId" @click="applySelectedTemplate">
+                        套用模板
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-ghost"
+                        :disabled="!isEditMode || isChildTask"
+                        @click="openTemplateSave"
+                      >保存当前为模板</button>
+                      <p class="template-menu-hint">套用模板不会覆盖当前截止时间；保存模板不包含日期和重复规则。</p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <label class="title-field">
                 <span class="field-label">标题</span>
-                <input v-model.trim="form.title" type="text" placeholder="请输入任务标题" class="title-input" />
+                <input id="task-editor-title-input" v-model.trim="form.title" type="text" placeholder="请输入任务标题" class="title-input" />
               </label>
-            </div>
-          </section>
+            </section>
 
-          <aside class="editor-side-column" aria-label="任务属性">
-            <section class="side-card">
-              <div class="section-heading compact">
-                <div>
-                  <p class="section-kicker">属性</p>
-                  <h3>基础信息</h3>
-                </div>
+            <section class="content-card desc-card">
+              <div class="section-heading tight">
+                <h3>描述</h3>
+                <span class="section-hint">Markdown · 点击预览可编辑</span>
               </div>
-
-              <div class="task-property-actions">
-                <span class="field-label">状态与优先级</span>
-                <TaskQuickActions
-                  :task="quickActionTask"
-                  :show-more="isEditMode"
-                  :allow-delete="isEditMode"
-                  popover-z-index="var(--z-dialog)"
-                  @cycle-status="handleMainStatusCycle"
-                  @set-priority="(_, priority) => handleMainPriorityChange(priority)"
-                  @toggle-archive="handleMainArchive"
-                  @delete="handleMainDelete"
-                />
+              <div class="desc-shell">
+                <label class="sr-only" for="task-description-input">任务描述</label>
+                <textarea v-if="descEditing" id="task-description-input" ref="descTextareaRef"
+                  v-model="form.description" rows="10" placeholder="支持 Markdown 文本输入，停止输入或失焦后自动预览" class="desc-textarea"
+                  @focus="enterDescEditing" @blur="scheduleLeaveDescEditing" />
+                <div v-else class="desc-preview" :class="{ 'is-empty': !descPreviewHtml }" @click="enterDescEditing">
+                  <div v-if="descPreviewHtml" v-html="descPreviewHtml"></div>
+                  <p v-else class="desc-empty">点击此处添加描述（支持 Markdown）</p>
+                </div>
               </div>
             </section>
 
-            <section class="side-card">
-              <div class="section-heading compact">
-                <div>
-                  <p class="section-kicker">组织方式</p>
-                  <h3>分组与标签</h3>
-                </div>
+            <section class="content-card subtask-card">
+              <div class="section-heading tight">
+                <h3>子任务</h3>
+                <span class="section-count">{{ subtasks.length }} 项</span>
               </div>
+
+              <div v-if="!isChildTask" class="subtask-create-panel">
+                <SmartTaskInput
+                  placeholder="输入子任务标题，!优先级 ~分组 #标签"
+                  submit-label="新增"
+                  @create="handleCreateSubtaskFromInput"
+                />
+              </div>
+              <p v-else class="subtask-context-hint">当前任务是子任务，可从父任务中管理同级执行项。</p>
+
+              <ul v-if="subtasks.length > 0" class="subtask-list">
+                <li v-for="subtask in subtasks" :key="subtask.id" class="subtask-item">
+                  <TaskQuickActions :task="subtask" :show-more="false" popover-z-index="var(--z-dialog)"
+                    @cycle-status="handleSubtaskCycle" @set-priority="(_, priority) => handleSubtaskPriorityChange(subtask, priority)" />
+
+                  <button type="button" class="subtask-main" :disabled="!currentTask"
+                    @click="openTaskInEditor(subtask)">
+                    <span class="subtask-title" :class="{ done: subtask.status === 'done' }">{{ subtask.title }}</span>
+                    <span class="subtask-meta-row">
+                      <span class="subtask-chip muted">{{ formatTaskDue(subtask) }}</span>
+                      <span v-if="parentTask" class="subtask-chip muted">属于：{{ parentTask.title }}</span>
+                    </span>
+                  </button>
+
+                  <div class="subtask-actions">
+                    <PomodoroStartButton v-if="currentTask" :task="subtask" />
+                    <button v-if="currentTask" type="button" class="btn btn-ghost subtask-open"
+                      @click="openTaskInEditor(subtask)">打开</button>
+                    <button type="button" class="btn btn-danger subtask-delete"
+                      @click="handleDeleteSubtask(subtask.id)">删除</button>
+                  </div>
+                </li>
+              </ul>
+              <p v-else class="subtask-empty">{{ isChildTask ? '当前子任务没有下级执行项。' : '暂无子任务，先拆出一个最小行动项。' }}</p>
+            </section>
+          </section>
+
+          <aside class="editor-properties-panel" aria-label="任务属性">
+            <h3 class="properties-title">任务属性</h3>
+
+            <section class="organization-section" aria-labelledby="organization-heading">
+              <h4 id="organization-heading">组织</h4>
 
               <div class="field-block">
                 <span class="field-label">分组</span>
@@ -1121,7 +1300,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
                   </span>
                   <input
                     v-else
-id="task-group-input"
+                    id="task-group-input"
                     v-model="groupDraft"
                     type="text"
                     class="chip-input"
@@ -1152,7 +1331,7 @@ id="task-group-input"
                     <button type="button" class="chip-remove" aria-label="移除标签" @click="removeTag(tag)">×</button>
                   </span>
                   <input
-id="task-tag-input"
+                    id="task-tag-input"
                     ref="tagInputRef"
                     v-model="tagDraft"
                     type="text"
@@ -1176,28 +1355,23 @@ id="task-tag-input"
               </div>
             </section>
 
-            <section class="side-card due-card">
-              <div class="section-heading compact">
-                <div>
-                  <p class="section-kicker">时间</p>
-                  <h3>截止时间</h3>
-                </div>
+            <section class="planning-section" aria-labelledby="planning-heading">
+              <h4 id="planning-heading">计划</h4>
+
+              <div class="planning-field due-section">
+                <div class="planning-field-heading">
+                  <span class="field-label">截止</span>
                 <button v-if="form.hasDue" type="button" class="due-clear-btn" title="移除截止时间" @click="clearDue">
                   <AppIcon name="x" :size="13" />
                 </button>
-              </div>
+                </div>
 
-              <button
-                v-if="!form.hasDue"
-                type="button"
-                class="due-add-btn"
-                @click="addDue"
-              >
-                <AppIcon name="plus" :size="14" />
-                <span>添加截止时间</span>
-              </button>
+                <button v-if="!form.hasDue" type="button" class="due-add-btn" @click="addDue">
+                  <AppIcon name="plus" :size="14" />
+                  <span>添加截止时间</span>
+                </button>
 
-              <div v-else class="due-editor">
+                <div v-else class="due-editor">
                 <div v-if="form.hasEndDate" class="due-range">
                   <div class="due-row due-range-row">
                     <span class="due-point-label"><i></i>开始</span>
@@ -1245,153 +1419,63 @@ id="task-tag-input"
                   <AppIcon name="calendarClock" :size="13" />
                   <span>{{ form.hasEndDate ? '时间段' : '设置时间段' }}</span>
                 </label>
-              </div>
-            </section>
-
-            <section class="side-card reminder-card">
-              <div class="section-heading compact">
-                <div>
-                  <p class="section-kicker">提醒</p>
-                  <h3>提前提醒</h3>
                 </div>
               </div>
 
-              <label class="field-block">
-                <span class="field-label">提前时间</span>
-                <div class="reminder-select-row">
-                  <select
-                    :value="form.reminderOffset ?? ''"
-                    class="reminder-select"
-                    @change="handleReminderOffsetChange"
-                  >
-                    <option value="">不提醒</option>
-                    <option value="0">准时</option>
-                    <option value="5">提前 5 分钟</option>
-                    <option value="15">提前 15 分钟</option>
-                    <option value="30">提前 30 分钟</option>
-                    <option value="60">提前 1 小时</option>
-                    <option value="120">提前 2 小时</option>
-                    <option value="1440">提前 1 天</option>
-                  </select>
+              <div class="planning-options-grid">
+                <div class="planning-field reminder-section">
+                  <label class="field-block">
+                    <span class="field-label">提醒</span>
+                    <select
+                      :value="form.reminderOffset ?? ''"
+                      class="reminder-select"
+                      @change="handleReminderOffsetChange"
+                    >
+                      <option value="">不提醒</option>
+                      <option value="0">准时</option>
+                      <option value="5">提前 5 分钟</option>
+                      <option value="15">提前 15 分钟</option>
+                      <option value="30">提前 30 分钟</option>
+                      <option value="60">提前 1 小时</option>
+                      <option value="120">提前 2 小时</option>
+                      <option value="1440">提前 1 天</option>
+                    </select>
+                    <p v-if="!form.hasDue" class="field-hint">需先设置截止时间</p>
+                    <p class="field-hint reminder-behavior-hint" title="插件窗口打开时实时提醒；关闭后会在下次进入时补报。">
+                      关闭后下次进入补报
+                    </p>
+                  </label>
                 </div>
-                <p v-if="!form.hasDue" class="field-hint">需先设置截止时间</p>
-                <p class="field-hint">插件窗口打开时实时提醒；关闭后会在下次进入时补报。</p>
-              </label>
-            </section>
 
-            <section class="side-card repeat-card">
-              <div class="section-heading compact">
-                <div>
-                  <p class="section-kicker">重复</p>
-                  <h3>重复规则</h3>
+                <div class="planning-field repeat-section" :class="{ 'is-expanded': form.repeatType }">
+                  <label class="field-block">
+                    <span class="field-label">重复</span>
+                    <select v-model="form.repeatType" class="repeat-type-select">
+                      <option value="">不重复</option>
+                      <option value="daily">每天</option>
+                      <option value="weekly">每周</option>
+                      <option value="monthly">每月</option>
+                      <option value="custom">自定义间隔</option>
+                    </select>
+                  </label>
+
+                  <template v-if="form.repeatType">
+                    <label v-if="form.repeatType === 'custom'" class="field-block">
+                      <span class="field-label">间隔天数</span>
+                      <input v-model.number="form.repeatInterval" type="number" min="1" max="365"
+                        class="interval-input" placeholder="1" />
+                    </label>
+
+                    <label class="field-block">
+                      <span class="field-label">结束日期 <span class="field-hint-inline">（选填）</span></span>
+                      <input v-model="form.repeatUntilDate" type="date" class="repeat-date-input" aria-label="重复结束日期" />
+                    </label>
+                    <p class="field-hint repeat-hint">完成任务后自动生成下一个实例</p>
+                  </template>
                 </div>
               </div>
-
-              <label class="field-block">
-                <span class="field-label">重复方式</span>
-                <select v-model="form.repeatType" class="repeat-type-select">
-                  <option value="">不重复</option>
-                  <option value="daily">每天</option>
-                  <option value="weekly">每周</option>
-                  <option value="monthly">每月</option>
-                  <option value="custom">自定义间隔</option>
-                </select>
-              </label>
-
-              <template v-if="form.repeatType">
-                <label v-if="form.repeatType === 'custom'" class="field-block">
-                  <span class="field-label">间隔天数</span>
-                  <input
-                    v-model.number="form.repeatInterval"
-                    type="number"
-                    min="1"
-                    max="365"
-                    class="interval-input"
-                    placeholder="1"
-                  />
-                </label>
-
-                <label class="field-block">
-                  <span class="field-label">结束日期 <span class="field-hint-inline">（选填）</span></span>
-                  <input
-                    v-model="form.repeatUntilDate"
-                    type="date"
-                    class="repeat-date-input"
-                    aria-label="重复结束日期"
-                  />
-                </label>
-                <p class="field-hint repeat-hint">完成任务后自动生成下一个实例</p>
-              </template>
             </section>
           </aside>
-
-          <section class="editor-main-column">
-
-            <section class="content-card desc-card">
-              <div class="section-heading tight">
-                <div>
-                  <p class="section-kicker">内容</p>
-                  <h3>描述</h3>
-                </div>
-                <span class="section-hint">支持 Markdown · 点击预览可编辑</span>
-              </div>
-              <div class="desc-shell">
-                <label class="sr-only" for="task-description-input">任务描述</label>
-                <textarea v-if="descEditing" id="task-description-input" ref="descTextareaRef"
-                  v-model="form.description" rows="10" placeholder="支持 Markdown 文本输入，停止输入或失焦后自动预览" class="desc-textarea"
-                  @focus="enterDescEditing" @blur="scheduleLeaveDescEditing" />
-                <div v-else class="desc-preview" :class="{ 'is-empty': !descPreviewHtml }" @click="enterDescEditing">
-                  <div v-if="descPreviewHtml" v-html="descPreviewHtml"></div>
-                  <p v-else class="desc-empty">点击此处添加描述（支持 Markdown）</p>
-                </div>
-              </div>
-            </section>
-
-            <section class="content-card subtask-card">
-              <div class="section-heading tight">
-                <div>
-                  <p class="section-kicker">执行项</p>
-                  <h3>子任务</h3>
-                </div>
-                <span class="section-count">{{ subtasks.length }} 项</span>
-              </div>
-
-              <div v-if="!isChildTask" class="subtask-create-panel">
-                <SmartTaskInput
-                  placeholder="输入子任务标题，!优先级 ~分组 #标签"
-                  submit-label="新增"
-                  @create="handleCreateSubtaskFromInput"
-                />
-              </div>
-              <p v-else class="subtask-context-hint">当前任务是子任务，可从父任务中管理同级执行项。</p>
-
-              <ul v-if="subtasks.length > 0" class="subtask-list">
-                <li v-for="subtask in subtasks" :key="subtask.id" class="subtask-item">
-                  <TaskQuickActions :task="subtask" :show-more="false" popover-z-index="var(--z-dialog)"
-                    @cycle-status="handleSubtaskCycle" @set-priority="(_, priority) => handleSubtaskPriorityChange(subtask, priority)" />
-
-                  <button type="button" class="subtask-main" :disabled="!currentTask"
-                    @click="openTaskInEditor(subtask)">
-                    <span class="subtask-title" :class="{ done: subtask.status === 'done' }">{{ subtask.title }}</span>
-                    <span class="subtask-meta-row">
-                      <span class="subtask-chip muted">{{ formatTaskDue(subtask) }}</span>
-                      <span v-if="parentTask" class="subtask-chip muted">属于：{{ parentTask.title }}</span>
-                    </span>
-                  </button>
-
-                  <div class="subtask-actions">
-                    <PomodoroStartButton v-if="currentTask" :task="subtask" />
-                    <button v-if="currentTask" type="button" class="btn btn-ghost subtask-open"
-                      @click="openTaskInEditor(subtask)">打开</button>
-                    <button type="button" class="btn btn-danger subtask-delete"
-                      @click="handleDeleteSubtask(subtask.id)">删除</button>
-                  </div>
-                </li>
-              </ul>
-              <p v-else class="subtask-empty">{{ isChildTask ? '当前子任务没有下级执行项。' : '暂无子任务，先拆出一个最小行动项。' }}</p>
-            </section>
-          </section>
-
         </div>
 
         <footer class="task-editor-footer">
@@ -1435,7 +1519,7 @@ id="task-tag-input"
 
   .task-editor {
 	position: relative;
-    width: min(960px, calc(100vw - var(--space-6)));
+    width: min(1080px, calc(100vw - var(--space-6)));
     height: min(720px, calc(100vh - var(--space-6)));
     max-height: calc(100vh - var(--space-6));
     border-radius: var(--radius-lg);
@@ -1466,6 +1550,12 @@ id="task-tag-input"
     gap: 2px;
   }
 
+  .task-editor-heading-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+  }
+
   .task-editor-subtitle {
     margin: 0;
     font-size: var(--text-xs);
@@ -1494,45 +1584,29 @@ id="task-tag-input"
   }
 
   .task-editor-body {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: auto;
     padding: var(--space-3);
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
-    grid-template-areas:
-      "hero side"
-      "main side";
+    grid-template-columns: minmax(0, 1fr) 300px;
     gap: var(--space-3);
     align-items: start;
     background: linear-gradient(180deg, color-mix(in srgb, var(--color-bg-base) 18%, transparent), transparent 220px);
   }
 
-  .editor-hero-column {
-    grid-area: hero;
-    min-width: 0;
-  }
-
   .editor-main-column,
-  .editor-side-column {
+  .editor-properties-panel {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
     min-width: 0;
-    /* 不能用 0：在矮窗口下会让 grid 行的自动最小尺寸塌陷为 0，
-       导致内容溢出并与相邻区域重叠（元素堆叠）。 */
     min-height: auto;
   }
 
-  .editor-main-column {
-    grid-area: main;
-  }
-
-  .editor-side-column {
-    grid-area: side;
-  }
-
-  .hero-panel,
+  .title-workspace,
   .content-card,
-  .side-card {
+  .editor-properties-panel {
     position: relative;
     background: color-mix(in srgb, var(--color-bg-elevated) 92%, transparent);
     border: 1px solid var(--color-border-subtle);
@@ -1540,7 +1614,7 @@ id="task-tag-input"
     box-shadow: var(--shadow-sm);
   }
 
-  .hero-panel {
+  .title-workspace {
     padding: var(--space-3);
     display: flex;
     flex-direction: column;
@@ -1553,10 +1627,23 @@ id="task-tag-input"
   .hero-meta-row {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    justify-content: space-between;
     gap: var(--space-2);
     color: var(--color-text-secondary);
     font-size: var(--text-sm);
+  }
+
+  .hero-meta-summary,
+  .title-workspace-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .title-workspace-actions {
+    flex-wrap: nowrap;
   }
 
   .meta-pill {
@@ -1670,9 +1757,78 @@ id="task-tag-input"
     border-color: var(--color-border-default);
   }
 
-  .content-card,
-  .side-card {
+  .content-card {
     padding: var(--space-3);
+  }
+
+  .editor-properties-panel {
+    gap: 0;
+    padding: var(--space-3);
+  }
+
+  .properties-title,
+  .organization-section h4,
+  .planning-section h4 {
+    margin: 0;
+    color: var(--color-text-primary);
+  }
+
+  .properties-title {
+    padding-bottom: var(--space-3);
+    font-size: var(--text-md);
+  }
+
+  .organization-section,
+  .planning-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3) 0;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .organization-section h4,
+  .planning-section h4 {
+    font-size: var(--text-sm);
+  }
+
+  .planning-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .planning-field + .planning-field {
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .planning-options-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+
+  .planning-options-grid .planning-field + .planning-field {
+    padding-top: 0;
+    padding-left: var(--space-2);
+    border-top: 0;
+    border-left: 1px solid var(--color-border-subtle);
+  }
+
+  .planning-options-grid .repeat-section.is-expanded {
+    grid-column: 1 / -1;
+    padding-top: var(--space-2);
+    padding-left: 0;
+    border-top: 1px solid var(--color-border-subtle);
+    border-left: 0;
+  }
+
+  .planning-field-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 24px;
   }
 
   .section-heading {
@@ -1727,13 +1883,6 @@ id="task-tag-input"
     min-height: 34px;
   }
 
-  .task-property-actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
-  }
-
   /* 描述：单区域切换式实时预览（编辑/预览共用同一区域） */
   .desc-shell {
     display: block;
@@ -1741,8 +1890,8 @@ id="task-tag-input"
 
   .desc-textarea,
   .desc-preview {
-    min-height: 220px;
-    max-height: min(34vh, 320px);
+    min-height: 260px;
+    max-height: min(48vh, 520px);
     border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--color-bg-input) 92%, transparent);
     border: 1px solid var(--color-border-subtle);
@@ -2026,7 +2175,7 @@ id="task-tag-input"
   }
 
   /* 截止时间 */
-  .due-card {
+  .due-section {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
@@ -2255,17 +2404,6 @@ id="task-tag-input"
     font-weight: 500;
   }
 
-  .summary-card {
-    gap: var(--space-4);
-  }
-
-  /* ── 提醒 & 重复 cards ─────────────────────────────── */
-  .reminder-select-row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
   .reminder-select,
   .repeat-type-select,
   .repeat-date-input,
@@ -2362,6 +2500,67 @@ id="task-tag-input"
   .template-save-dialog input { width: 100%; padding: var(--space-2); border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: var(--color-bg-input); color: var(--color-text-primary); }
   .template-save-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
 
+  .template-menu-anchor {
+    position: relative;
+  }
+
+  .template-menu-trigger {
+    min-height: 28px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
+  }
+
+  .template-menu-trigger:hover,
+  .template-menu-trigger[aria-expanded="true"] {
+    border-color: var(--color-border-default);
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+  }
+
+  .template-menu-trigger:focus-visible,
+  .template-menu button:focus-visible,
+  .template-menu select:focus-visible {
+    outline: none;
+    box-shadow: var(--ring-focus);
+  }
+
+  .template-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: var(--z-dropdown, 10);
+    width: min(290px, calc(100vw - var(--space-6)));
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-elevated);
+    box-shadow: var(--shadow-md);
+  }
+
+  .template-menu select {
+    width: 100%;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-input);
+    color: var(--color-text-primary);
+  }
+
+  .template-menu-hint {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    line-height: 1.45;
+  }
+
   .desc-preview {
     font-size: var(--text-sm);
     line-height: 1.55;
@@ -2374,12 +2573,12 @@ id="task-tag-input"
   }
 
   .subtask-list {
-    max-height: min(26vh, 240px);
+    max-height: min(38vh, 360px);
     overflow: auto;
     padding-right: 2px;
   }
 
-  @media (max-width: 1040px) {
+  @media (min-width: 721px) and (max-width: 859px) {
     .task-editor {
       width: calc(100vw - var(--space-4));
       height: calc(100vh - var(--space-4));
@@ -2387,28 +2586,29 @@ id="task-tag-input"
     }
 
     .task-editor-body {
-      grid-template-columns: 1fr;
-      grid-template-areas:
-        "hero"
-        "side"
-        "main";
+      grid-template-columns: minmax(0, 1fr) 276px;
+      gap: var(--space-2);
+      padding: var(--space-2);
     }
 
-    .editor-side-column {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+    .editor-main-column {
       gap: var(--space-2);
     }
 
-    .due-card,
-    .repeat-card {
-      grid-column: span 2;
+    .title-workspace,
+    .content-card,
+    .editor-properties-panel {
+      padding: var(--space-2);
+    }
+
+    .hero-meta-row {
+      align-items: flex-start;
     }
 
     .desc-textarea,
     .desc-preview {
-      min-height: 160px;
-      max-height: min(28vh, 260px);
+      min-height: 240px;
+      max-height: min(44vh, 460px);
     }
   }
 
@@ -2461,57 +2661,77 @@ id="task-tag-input"
     }
 
     .task-editor-body {
-      display: grid;
-      grid-template-columns: 1fr;
-      grid-template-areas:
-        "hero"
-        "side"
-        "main";
+      display: flex;
+      flex-direction: column;
       gap: 6px;
       padding: 6px;
       background: var(--color-bg-base);
     }
 
-    .editor-main-column {
-      display: flex;
-      gap: 6px;
-    }
-
-    .editor-hero-column,
-    .editor-main-column,
-    .editor-side-column {
+    .title-workspace,
+    .editor-properties-panel,
+    .content-card {
       width: 100%;
     }
 
-    .hero-panel {
+    .title-workspace {
       padding: 8px 10px;
       gap: var(--space-1);
       border-radius: var(--radius-md);
     }
 
-    .editor-side-column {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 6px;
-    }
-
     .content-card,
-    .side-card {
+    .editor-properties-panel {
       padding: 8px;
       border-radius: var(--radius-md);
       box-shadow: none;
     }
 
-    .side-card {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      min-height: 0;
+    .properties-title {
+      padding-bottom: var(--space-2);
+    }
+
+    .organization-section,
+    .planning-section {
+      gap: var(--space-2);
+      padding: var(--space-2) 0;
+    }
+
+    .planning-section {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .planning-options-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .planning-options-grid .planning-field + .planning-field,
+    .planning-options-grid .repeat-section.is-expanded {
+      grid-column: auto;
+      padding-top: var(--space-2);
+      padding-left: 0;
+      border-top: 1px solid var(--color-border-subtle);
+      border-left: 0;
+    }
+
+    .planning-section h4 {
+      grid-column: 1 / -1;
+    }
+
+    .planning-field + .planning-field {
+      padding-top: var(--space-2);
     }
 
     .hero-meta-row {
+      align-items: flex-start;
       gap: var(--space-1);
       font-size: var(--text-xs);
+    }
+
+    .hero-meta-summary {
+      flex: 1 1 auto;
+      gap: var(--space-1);
     }
 
     .meta-pill {
@@ -2530,13 +2750,16 @@ id="task-tag-input"
       font-size: var(--text-lg);
     }
 
+    .template-menu-trigger {
+      min-height: 32px;
+    }
+
     .section-heading {
       margin-bottom: 0;
       gap: var(--space-2);
       align-items: center;
     }
 
-    .section-kicker,
     .section-hint {
       display: none;
     }
@@ -2566,13 +2789,13 @@ id="task-tag-input"
 
     .desc-textarea,
     .desc-preview {
-      min-height: 96px;
-      max-height: 160px;
+      min-height: 180px;
+      max-height: min(38vh, 320px);
       padding: var(--space-2);
     }
 
     .subtask-list {
-      max-height: 150px;
+      max-height: min(36vh, 300px);
     }
 
     .subtask-item {
@@ -2591,10 +2814,6 @@ id="task-tag-input"
       padding: 0 var(--space-2);
       min-height: 28px;
       font-size: var(--text-xs);
-    }
-
-    .due-card {
-      grid-column: span 2;
     }
 
     .due-editor {
@@ -2649,14 +2868,6 @@ id="task-tag-input"
   }
 
   @media (max-width: 480px) {
-    .editor-side-column {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .due-card {
-      grid-column: span 2;
-    }
-
     .task-editor-footer {
       flex-wrap: nowrap;
     }
