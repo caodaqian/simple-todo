@@ -68,6 +68,13 @@ const priorityLabels: Record<TaskPriority, string> = {
 	urgent: '紧急',
 };
 
+const priorityIcons: Record<TaskPriority, string> = {
+	low: 'bookmark',
+	medium: 'flag',
+	high: 'star',
+	urgent: 'zap',
+};
+
 const closePopover = (): void => {
 	openPopover.value = null;
 	removeCloseListeners();
@@ -167,7 +174,7 @@ onBeforeUnmount(removeCloseListeners);
 			:aria-expanded="openPopover === 'priority'"
 			@click.stop="togglePopover('priority', $event.currentTarget)"
 		>
-			<AppIcon name="flag" :size="16" />
+			<AppIcon :name="priorityIcons[task.priority]" :size="16" />
 		</button>
 
 		<button
@@ -204,7 +211,7 @@ onBeforeUnmount(removeCloseListeners);
 					:aria-label="`设为${option.label}优先级`"
 					@click="selectPriority(option.value)"
 				>
-					<AppIcon name="flag" :size="15" />
+					<AppIcon :name="priorityIcons[option.value]" :size="15" />
 					<span>{{ option.label }}</span>
 				</button>
 			</div>
@@ -294,6 +301,17 @@ onBeforeUnmount(removeCloseListeners);
 .task-quick-actions__priority--medium { color: var(--color-priority-medium); }
 .task-quick-actions__priority--high { color: var(--color-priority-high); }
 .task-quick-actions__priority--urgent { color: var(--color-priority-urgent); }
+
+.task-quick-actions__priority--low,
+.task-quick-actions__priority--medium,
+.task-quick-actions__priority--high,
+.task-quick-actions__priority--urgent {
+	background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.task-quick-actions__priority--urgent {
+	font-weight: 700;
+}
 
 .task-quick-actions__popover {
 	position: fixed;

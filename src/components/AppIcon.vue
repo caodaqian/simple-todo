@@ -34,6 +34,7 @@ import {
     Timer,
     Trash2,
     X,
+    Zap,
 } from 'lucide-vue-next';
 import { computed, type Component } from 'vue';
 
@@ -87,6 +88,7 @@ const ICON_MAP: Record<string, Component> = {
   filter: Filter,
   timer: Timer,
   square: Square,
+  zap: Zap,
 };
 
 const warned = new Set<string>();

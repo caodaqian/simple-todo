@@ -479,34 +479,62 @@ input[type="radio"] {
   border-color: var(--color-accent) !important;
 }
 
-/* ---------- Priority dot ---------- */
+/* ---------- Priority marker ---------- */
 .priority-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: var(--color-text-muted);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid currentColor;
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, currentColor 12%, transparent);
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .priority-dot.high {
-  background: var(--color-priority-high);
+  color: var(--color-priority-high);
+  border-radius: 4px;
 }
 
 .priority-dot.medium {
-  background: var(--color-priority-medium);
+  color: var(--color-priority-medium);
+  border-radius: 50%;
 }
 
 .priority-dot.low {
-  background: var(--color-priority-low);
+  color: var(--color-priority-low);
+  border-radius: 50%;
+}
+
+.priority-dot.low::after {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .priority-dot.urgent {
-  background: var(--color-priority-urgent);
+  color: var(--color-priority-urgent);
+  border-radius: 4px;
+  transform: rotate(45deg);
+}
+
+.priority-dot.urgent::after {
+  content: '';
+  width: 6px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: rotate(-45deg);
 }
 
 .priority-dot.done {
-  background: var(--color-status-done);
+  color: var(--color-status-done);
 }
 
 /* ---------- Status badge (compat) ---------- */
