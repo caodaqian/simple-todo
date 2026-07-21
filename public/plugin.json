@@ -7,7 +7,7 @@
 		"main": "http://localhost:5173"
 	},
 	"pluginSetting": {
-		"height": 700
+		"height": 850
 	},
 	"features": [
 		{
@@ -829,7 +829,7 @@
 			}
 		},
 		"todo_apply_template": {
-			"description": "从模板创建一个任务及其扁平子任务。template_id 必填；覆盖字段可省略或传 null（等同使用模板默认值）。全天日期用 YYYY-MM-DD，精确时间用 ISO 8601；单点截止只需 due_end，时间段 due_start 与 due_end 同时存在时自动按时间升序归一化。",
+			"description": "从模板构建一个任务及其扁平子任务。template_id 必填；未提供或传 null 的内容字段继承模板，description、priority、tags、group 和 child_tasks 可按本次需求覆盖。child_tasks 传入后整体替换模板步骤。日期和提醒只作用于本次创建，不会修改模板；模板不会产生重复规则。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -844,6 +844,26 @@
 							"null"
 						],
 						"description": "可选。覆盖模板标题；null 等同使用模板标题。"
+					},
+					"description": {
+						"type": [
+							"string",
+							"null"
+						],
+						"description": "可选。整体替换模板描述；传空字符串可清空，null 等同使用模板描述。"
+					},
+					"priority": {
+						"type": [
+							"string",
+							"null"
+						],
+						"enum": [
+							"low",
+							"medium",
+							"high",
+							"urgent"
+						],
+						"description": "可选。覆盖模板默认优先级；null 等同使用模板优先级。"
 					},
 					"tags": {
 						"type": [
@@ -861,6 +881,55 @@
 							"null"
 						],
 						"description": "可选。覆盖模板分组；null 等同使用模板分组。"
+					},
+					"child_tasks": {
+						"type": [
+							"array",
+							"null"
+						],
+						"items": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string",
+									"description": "必填。非空子任务标题。"
+								},
+								"description": {
+									"type": "string",
+									"description": "可选。子任务描述。"
+								},
+								"priority": {
+									"type": "string",
+									"enum": [
+										"low",
+										"medium",
+										"high",
+										"urgent"
+									]
+								},
+								"tags": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								},
+								"group": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"title"
+							]
+						},
+						"description": "可选。整体替换模板中的直接子任务；未提供字段继承本次主任务的优先级、标签和分组。null 等同使用模板步骤。"
+					},
+					"reminder_offset": {
+						"type": [
+							"number",
+							"null"
+						],
+						"description": "可选。覆盖模板的提前提醒分钟数；null 清除本次任务提醒；没有截止时间时不能设置。"
 					},
 					"due_start": {
 						"type": [

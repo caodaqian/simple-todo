@@ -1244,6 +1244,39 @@ describe('toolHandlers – pure logic', () => {
 			expect(task.reminderOffset).toBe(15);
 		});
 
+		it('inherits template description and supports overriding the task and child content', () => {
+			const r = createTemplateHandler(db, {
+				name: '发布模板', title: '发布版本', priority: 'medium', description: '模板说明',
+				child_tasks: [{ title: '默认步骤', description: '默认步骤说明' }],
+			}) as { template_id: string };
+
+			const inherited = applyTemplateHandler(db, { template_id: r.template_id }) as { task_id: string };
+			const overridden = applyTemplateHandler(db, {
+				template_id: r.template_id,
+				description: '本次发布说明',
+				priority: 'high',
+				child_tasks: [{ title: '定制步骤', priority: 'urgent', description: '本次执行说明' }],
+			}) as { task_id: string };
+
+			const tasks = db.snapshot() as Array<Record<string, unknown>>;
+			const inheritedTask = tasks.find((task) => task.id === inherited.task_id)!;
+			const overriddenTask = tasks.find((task) => task.id === overridden.task_id)!;
+			expect(inheritedTask.description).toBe('模板说明');
+			expect(inheritedTask.priority).toBe('medium');
+			expect(overriddenTask.description).toBe('本次发布说明');
+			expect(overriddenTask.priority).toBe('high');
+			expect(tasks.filter((task) => task.parentTaskId === overridden.task_id)).toMatchObject([
+				{ title: '定制步骤', priority: 'urgent', description: '本次执行说明', status: 'todo' },
+			]);
+		});
+
+		it('allows an empty description override to clear the template description', () => {
+			const r = createTemplateHandler(db, { name: '模板', title: '任务', description: '默认说明' }) as { template_id: string };
+			const applied = applyTemplateHandler(db, { template_id: r.template_id, description: '' }) as { task_id: string };
+			const task = (db.snapshot() as Array<Record<string, unknown>>).find((item) => item.id === applied.task_id)!;
+			expect(task.description).toBe('');
+		});
+
 		it('treats null optional template schedule overrides as omitted', () => {
 			const created = createTemplateHandler(db, { name: '无时间模板', title: '模板任务' }) as { template_id: string };
 

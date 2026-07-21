@@ -37,9 +37,20 @@ const refresh = (): void => {
 const filteredTemplates = computed(() => {
   const keyword = query.value.trim().toLocaleLowerCase();
   if (!keyword) return templates.value;
-  return templates.value.filter((template) => [template.name, template.title, template.group, ...template.tags]
+  return templates.value.filter((template) => [template.name, template.title, template.description, template.group, ...template.tags]
     .some((value) => value.toLocaleLowerCase().includes(keyword)));
 });
+
+  const descriptionPreview = (description: string): string => {
+    const plainText = description
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/[#>*_`~-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return plainText || '暂无描述';
+  };
 
 const availableTags = computed(() => [...new Set([
   ...taskService.getAll().flatMap((task) => task.tags),
@@ -198,7 +209,7 @@ defineExpose({ activate });
 
         <label class="template-library__search">
           <AppIcon name="filter" :size="16" />
-          <input v-model="query" type="search" placeholder="搜索模板、标签或分组" autofocus />
+          <input v-model="query" type="search" placeholder="搜索模板、描述、标签或分组" autofocus />
         </label>
 
         <div v-if="filteredTemplates.length" class="template-library__list">
@@ -206,6 +217,9 @@ defineExpose({ activate });
             <div class="template-card__main">
               <strong>{{ template.name }}</strong>
               <span>{{ template.title }}</span>
+              <p class="template-card__description" :class="{ 'is-empty': !template.description.trim() }">
+                {{ descriptionPreview(template.description) }}
+              </p>
               <small>
                 {{ template.childTasks.length }} 个步骤
                 <template v-if="template.group"> · {{ template.group }}</template>
@@ -278,6 +292,23 @@ defineExpose({ activate });
 .template-card { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); }
 .template-card__main { min-width: 0; display: grid; gap: 2px; }
 .template-card__main span { overflow: hidden; color: var(--color-text-muted); text-overflow: ellipsis; white-space: nowrap; }
+
+  .template-card__description {
+    display: -webkit-box;
+    overflow: hidden;
+    margin: 2px 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: 1.4;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .template-card__description.is-empty {
+    color: var(--color-text-muted);
+  }
+
+ 
 .template-card__main small { color: var(--color-text-muted); }
 .template-card__actions { display: flex; gap: var(--space-2); flex-shrink: 0; }
 .template-library__empty { display: grid; justify-items: center; gap: var(--space-2); padding: var(--space-8) var(--space-4); text-align: center; color: var(--color-text-muted); }

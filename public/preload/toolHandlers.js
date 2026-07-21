@@ -1241,7 +1241,7 @@ function deleteTemplateHandler(dbStorage, params) {
 }
 
 function applyTemplateHandler(dbStorage, params) {
-	params = omitOptionalNulls(params, ['title', 'tags', 'group', 'due_start', 'due_end', 'due_date', 'all_day']);
+	params = omitOptionalNulls(params, ['title', 'priority', 'tags', 'group', 'description', 'child_tasks', 'due_start', 'due_end', 'due_date', 'all_day']);
 	const id = params && params.template_id;
 	if (!id) throw new Error('template_id 不能为空');
 	const list = readTemplatesFromDb(dbStorage);
@@ -1249,8 +1249,11 @@ function applyTemplateHandler(dbStorage, params) {
 	if (!tpl) throw new Error('未找到模板: ' + id);
 
 	const title = (params.title && typeof params.title === 'string') ? params.title.trim() : tpl.title;
+	const priority = params.priority === undefined ? (tpl.priority || 'medium') : params.priority;
+	if (!isTaskPriority(priority)) throw new Error('任务优先级无效');
 	const tags = Array.isArray(params.tags) ? params.tags : (tpl.tags || []).slice();
 	const group = (params.group && typeof params.group === 'string') ? params.group.trim() : (tpl.group || '');
+	const description = typeof params.description === 'string' ? params.description : (tpl.description || '');
 	const allDay = params.all_day === true;
 	// 单点截止优先 due_end；旧 due_date 兼容并解释为单点截止；与 due_start 同时存在时自动按升序归一化
 	const parsedStart = params.due_start !== undefined ? parseTaskTime(params.due_start, allDay) : undefined;
@@ -1266,10 +1269,10 @@ function applyTemplateHandler(dbStorage, params) {
 		id: generateId(),
 		title: title,
 		status: 'todo',
-		priority: tpl.priority || 'medium',
+		priority: priority,
 		tags: tags,
 		group: group,
-		description: tpl.description || '',
+		description: description,
 		subtasks: [],
 		createdAt: now,
 		updatedAt: now,
@@ -1277,13 +1280,21 @@ function applyTemplateHandler(dbStorage, params) {
 	if (dueStart !== undefined) task.dueStart = dueStart;
 	if (dueEnd !== undefined) task.dueEnd = dueEnd;
 	if (params.all_day === true) task.allDay = true;
-	if (tpl.reminderOffset !== undefined) task.reminderOffset = tpl.reminderOffset;
+	const reminderOffset = hasOwn(params, 'reminder_offset')
+		? normalizeReminderOffset(params.reminder_offset)
+		: tpl.reminderOffset;
+	if (reminderOffset !== undefined) {
+		if (dueStart === undefined && dueEnd === undefined) throw new Error('设置提醒需要先有截止日期');
+		task.reminderOffset = reminderOffset;
+	}
 
 	const tasks = readTasksFromDb(dbStorage);
 	tasks.push(task);
-	const childTasks = Array.isArray(tpl.childTasks) ? tpl.childTasks : (Array.isArray(tpl.children) ? tpl.children.map(function (title) {
+	const childTasks = params.child_tasks !== undefined
+		? normalizeTemplateChildTasks(params.child_tasks, { priority: priority, tags: tags, group: group })
+		: (Array.isArray(tpl.childTasks) ? tpl.childTasks : (Array.isArray(tpl.children) ? tpl.children.map(function (title) {
 		return { title: title, priority: task.priority, tags: task.tags, group: task.group, description: '' };
-	}) : (tpl.subtasks || []).map(function (subtask) { return { title: subtask.title, priority: task.priority, tags: task.tags, group: task.group, description: '' }; }));
+		}) : (tpl.subtasks || []).map(function (subtask) { return { title: subtask.title, priority: task.priority, tags: task.tags, group: task.group, description: '' }; })));
 	childTasks.forEach(function (child) {
 		if (!child || typeof child.title !== 'string' || !child.title.trim()) return;
 		tasks.push({
