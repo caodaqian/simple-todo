@@ -50,11 +50,14 @@ import ListView from '../ListView/index.vue';
   // 视图排序——list/kanban 接收此 prop；eisenhower/calendar 内部硬编码，忽略此 ref
   const activeSort = ref<TaskSortOption>(persistedUiState.activeSort);
 
+  const filterToolbarRef = ref<{ focusKeywordSearch: () => void } | null>(null);
+
   const utoolsTaskSearch = useUtoolsTaskSearch({
     getTitleKeyword: () => activeFilter.value.titleKeyword ?? '',
     onInput: (text) => {
       activeFilter.value = mergePatch(activeFilter.value, { titleKeyword: text.trim() || undefined });
     },
+    fallbackToolbar: filterToolbarRef,
   });
 
   // 持久化运行时视图状态：任一变化即回写 dbStorage。
@@ -496,6 +499,7 @@ import ListView from '../ListView/index.vue';
 
         <!-- 顶部筛选下拉（带已应用数量徽标） -->
         <FilterToolbar
+ref="filterToolbarRef"
           v-model="activeFilter"
           :available-tags="allTags.map(t => t.name)"
           @reset="resetActiveFilter"

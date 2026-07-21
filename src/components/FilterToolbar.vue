@@ -1,5 +1,5 @@
 <script setup lang="ts">
-	import { computed, onBeforeUnmount, ref } from 'vue';
+	import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
 import { countActiveFilterFields } from '../services/filterUtils';
 import type { TaskSearchFilter } from '../types/task';
 import AppIcon from './AppIcon.vue';
@@ -17,7 +17,8 @@ import FilterPanel from './FilterPanel.vue';
 
 	const open = ref(false);
 	const triggerRef = ref<HTMLElement | null>(null);
-	const popoverRef = ref<InstanceType<typeof FilterPanel> & HTMLElement | null>(null);
+	const popoverRef = ref<HTMLElement | null>(null);
+	const filterPanelRef = ref<InstanceType<typeof FilterPanel> | null>(null);
 
 	const activeCount = computed(() => countActiveFilterFields(props.modelValue));
 
@@ -59,6 +60,15 @@ import FilterPanel from './FilterPanel.vue';
 	const reset = (): void => {
 		emit('reset');
 	};
+
+	const focusKeywordSearch = (): void => {
+		open.value = true;
+		void nextTick(() => {
+			filterPanelRef.value?.focusKeywordInput();
+		});
+	};
+
+	defineExpose({ focusKeywordSearch });
 </script>
 
 <template>
@@ -83,6 +93,7 @@ import FilterPanel from './FilterPanel.vue';
 
 		<div v-show="open" ref="popoverRef" class="filter-popover" role="presentation">
 			<FilterPanel
+ref="filterPanelRef"
 				:model-value="modelValue"
 				:available-tags="availableTags ?? []"
 				@update:model-value="update"

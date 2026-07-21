@@ -1,8 +1,12 @@
-import { getCurrentInstance, onUnmounted } from 'vue';
+import { getCurrentInstance, onUnmounted, type Ref } from 'vue';
 
 interface UseUtoolsTaskSearchOptions {
 	getTitleKeyword: () => string;
 	onInput: (text: string) => void;
+	/** uTools 子输入框不可用时，Cmd/Ctrl+F 调用此回调（如打开筛选面板并聚焦关键词输入框）。 */
+	onFallbackFocus?: () => void;
+	/** 可选的 FilterToolbar 组件 ref，用于回退聚焦。 */
+	fallbackToolbar?: Ref<{ focusKeywordSearch: () => void } | null>;
 }
 
 interface UtoolsTaskSearch {
@@ -12,7 +16,7 @@ interface UtoolsTaskSearch {
 
 const SUB_INPUT_PLACEHOLDER = '搜索任务标题';
 
-export const useUtoolsTaskSearch = ({ getTitleKeyword, onInput }: UseUtoolsTaskSearchOptions): UtoolsTaskSearch => {
+export const useUtoolsTaskSearch = ({ getTitleKeyword, onInput, onFallbackFocus, fallbackToolbar }: UseUtoolsTaskSearchOptions): UtoolsTaskSearch => {
 	let active = false;
 	let disposed = false;
 	let keydownInstalled = false;
@@ -23,6 +27,7 @@ export const useUtoolsTaskSearch = ({ getTitleKeyword, onInput }: UseUtoolsTaskS
 	const removeSubInput = (): void => {
 		if (!subInputInstalled) return;
 		try {
+			installedUtools?.subInputBlur?.();
 			installedUtools?.removeSubInput?.();
 		} catch {
 			// uTools API failure must not affect the main window.
@@ -47,9 +52,25 @@ export const useUtoolsTaskSearch = ({ getTitleKeyword, onInput }: UseUtoolsTaskS
 
 		try {
 			utools.setSubInputValue?.(getTitleKeyword());
+			focusUtoolsSubInput();
 		} catch {
 			// A failed echo must not lose the installed sub-input cleanup handle.
 		}
+	};
+
+	const focusUtoolsSubInput = (): boolean => {
+		if (!subInputInstalled) return false;
+		try {
+			if (installedUtools?.subInputSelect?.() === true) return true;
+			return installedUtools?.subInputFocus?.() === true;
+		} catch {
+			return false;
+		}
+	};
+
+	const triggerFallback = (): void => {
+		onFallbackFocus?.();
+		fallbackToolbar?.value?.focusKeywordSearch();
 	};
 
 	const onKeydown = (event: KeyboardEvent): void => {
@@ -57,16 +78,20 @@ export const useUtoolsTaskSearch = ({ getTitleKeyword, onInput }: UseUtoolsTaskS
 			event.altKey
 			|| !(event.metaKey || event.ctrlKey)
 			|| event.key.toLowerCase() !== 'f'
-			|| !subInputInstalled
 		) return;
 
-		try {
-			if (installedUtools?.subInputSelect?.() === true) {
-				event.preventDefault();
-			}
-		} catch {
-			// Let the browser's native find command handle unavailable uTools APIs.
+		// 优先聚焦 uTools 子输入框
+		if (focusUtoolsSubInput()) {
+			event.preventDefault();
+			return;
 		}
+
+		// 回退：打开筛选面板并聚焦关键词输入框
+		if (onFallbackFocus || fallbackToolbar?.value) {
+			triggerFallback();
+			event.preventDefault();
+		}
+		// 两者都不可用时，不阻止默认行为，让浏览器原生查找接管
 	};
 
 	const installKeydown = (): void => {

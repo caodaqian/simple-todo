@@ -47,6 +47,8 @@ interface Window {
 		onPluginOut(callback: (isKill: boolean) => void): void;
 		setSubInput?(onChange: (details: { text: string }) => void, placeholder?: string, isFocus?: boolean): boolean;
 		setSubInputValue?(text: string): boolean;
+		subInputFocus?(): boolean;
+		subInputBlur?(): boolean;
 		subInputSelect?(): boolean;
 		removeSubInput?(): boolean;
 		db?: UtoolsDb;

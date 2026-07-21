@@ -1,5 +1,5 @@
 <script setup lang="ts">
-	import { computed } from 'vue';
+	import { computed, ref } from 'vue';
 	import {
 		PRIORITY_OPTIONS,
 		STATUS_OPTIONS,
@@ -46,7 +46,14 @@
 		get: () => props.modelValue.keyword ?? '',
 		set: (v) => emit('update:modelValue', mergePatch(props.modelValue, { keyword: v.trim() ? v : undefined })),
 	});
+	const keywordInputRef = ref<HTMLInputElement | null>(null);
 
+	const focusKeywordInput = (): void => {
+		keywordInputRef.value?.focus();
+		keywordInputRef.value?.select();
+	};
+
+	defineExpose({ focusKeywordInput });
 	const isPrioritySelected = (p: TaskPriority): boolean =>
 		Array.isArray(props.modelValue.priority) && props.modelValue.priority.includes(p);
 
@@ -119,7 +126,8 @@
 		<div class="filter-row">
 			<label class="filter-row__label">关键词</label>
 			<div class="filter-row__control">
-				<input v-model="keyword" type="text" class="filter-input" placeholder="按标题或描述搜索" />
+				<input ref="keywordInputRef" v-model="keyword" type="text" class="filter-input"
+					placeholder="按标题或描述搜索" />
 				<button v-if="keyword" type="button" class="filter-clear-btn" title="清除关键词"
 					@click="keyword = ''">
 					<AppIcon name="x" :size="12" />
