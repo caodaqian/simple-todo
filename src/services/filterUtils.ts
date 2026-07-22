@@ -1,6 +1,7 @@
 import type {
 	TagMatchMode,
 	TaskDateRange,
+	TaskDateRules,
 	TaskPriority,
 	TaskSearchFilter,
 	TaskSortField,
@@ -8,6 +9,7 @@ import type {
 	TaskSortOrder,
 	TaskStatus,
 } from '../types/task';
+import type { SideSection } from '../types/uiState';
 
 export const PRIORITY_OPTIONS: ReadonlyArray<TaskPriority> = ['low', 'medium', 'high', 'urgent'];
 export const STATUS_OPTIONS: ReadonlyArray<TaskStatus> = ['todo', 'doing', 'done'];
@@ -170,6 +172,101 @@ export const toggleArrayValue = <T>(arr: T[] | undefined, value: T): T[] | undef
 		current.push(value);
 	}
 	return current.length === 0 ? undefined : current;
+};
+
+const hasDoneStatus = (status: TaskSearchFilter['status']): boolean =>
+	status === 'done' || (Array.isArray(status) && status.includes('done'));
+
+const sameDateRange = (left: TaskDateRange | undefined, right: TaskDateRange): boolean =>
+	left !== undefined && left.start === right.start && left.end === right.end;
+
+const getDateRangeForSection = (section: SideSection, rules: TaskDateRules): TaskDateRange | undefined => {
+	if (section === 'today') return { start: rules.startOfToday, end: rules.endOfToday };
+	if (section === 'week') return { start: rules.startOfToday, end: rules.endOfRecentDays };
+	return undefined;
+};
+
+/** 当前筛选是否已激活指定侧栏分面。 */
+export const isSidebarFilterActive = (
+	filter: TaskSearchFilter,
+	section: SideSection,
+	rules: TaskDateRules,
+): boolean => {
+	const dateRange = getDateRangeForSection(section, rules);
+	if (dateRange) return sameDateRange(filter.dateRange, dateRange) && filter.overdueOnly !== true;
+	if (section === 'overdue') return filter.overdueOnly === true;
+	if (section === 'done') return hasDoneStatus(filter.status) && filter.showCompleted === true;
+	if (section === 'archived') return filter.archived === true;
+	if (section.startsWith('group:')) return filter.group === section.slice(6);
+	if (section.startsWith('tag:')) return filter.tags?.includes(section.slice(4)) ?? false;
+	return false;
+};
+
+/** 是否存在任一由左侧栏管理的筛选分面。 */
+export const hasActiveSidebarFilters = (filter: TaskSearchFilter, rules: TaskDateRules): boolean =>
+	isSidebarFilterActive(filter, 'today', rules)
+	|| isSidebarFilterActive(filter, 'week', rules)
+	|| isSidebarFilterActive(filter, 'overdue', rules)
+	|| isSidebarFilterActive(filter, 'done', rules)
+	|| isSidebarFilterActive(filter, 'archived', rules)
+	|| filter.group !== undefined
+	|| (filter.tags?.length ?? 0) > 0;
+
+/** 切换一个侧栏筛选分面；各分面独立叠加，日期分面彼此互斥。 */
+export const toggleSidebarFilter = (
+	filter: TaskSearchFilter,
+	section: SideSection,
+	rules: TaskDateRules,
+): TaskSearchFilter => {
+	if (section === 'inbox') {
+		return mergePatch(filter, {
+			dateRange: undefined,
+			overdueOnly: undefined,
+			status: undefined,
+			showCompleted: undefined,
+			archived: undefined,
+			group: undefined,
+			tags: undefined,
+			tagMatchMode: undefined,
+		});
+	}
+
+	const dateRange = getDateRangeForSection(section, rules);
+	if (dateRange) {
+		return isSidebarFilterActive(filter, section, rules)
+			? mergePatch(filter, { dateRange: undefined, overdueOnly: undefined })
+			: mergePatch(filter, { dateRange, overdueOnly: undefined });
+	}
+
+	if (section === 'overdue') {
+		return filter.overdueOnly === true
+			? mergePatch(filter, { overdueOnly: undefined })
+			: mergePatch(filter, { dateRange: undefined, overdueOnly: true });
+	}
+
+	if (section === 'done') {
+		return isSidebarFilterActive(filter, section, rules)
+			? mergePatch(filter, { status: undefined, showCompleted: undefined })
+			: mergePatch(filter, { status: 'done', showCompleted: true });
+	}
+
+	if (section === 'archived') {
+		return filter.archived === true
+			? mergePatch(filter, { archived: undefined, showCompleted: undefined })
+			: mergePatch(filter, { archived: true, showCompleted: true });
+	}
+
+	if (section.startsWith('group:')) {
+		const group = section.slice(6);
+		return filter.group === group
+			? mergePatch(filter, { group: undefined })
+			: mergePatch(filter, { group });
+	}
+
+	const tags = toggleArrayValue(filter.tags, section.slice(4));
+	return tags
+		? mergePatch(filter, { tags })
+		: mergePatch(filter, { tags: undefined, tagMatchMode: undefined });
 };
 
 /** Date helpers —— 本地时区下 yyyy-mm-dd 与时间戳互转，end 含当日结束。 */

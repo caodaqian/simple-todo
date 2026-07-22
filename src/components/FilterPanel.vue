@@ -1,18 +1,18 @@
 <script setup lang="ts">
 	import { computed, ref } from 'vue';
-	import {
-		PRIORITY_OPTIONS,
-		STATUS_OPTIONS,
-		TAG_MATCH_MODE_OPTIONS,
-		buildDateRange,
-		dateToTimestampEnd,
-		dateToTimestampStart,
-		mergePatch,
-		timestampToDateInput,
-		toggleArrayValue,
-	} from '../services/filterUtils';
-	import type { TagMatchMode, TaskPriority, TaskSearchFilter, TaskStatus } from '../types/task';
-	import AppIcon from './AppIcon.vue';
+import {
+    PRIORITY_OPTIONS,
+    STATUS_OPTIONS,
+    TAG_MATCH_MODE_OPTIONS,
+    buildDateRange,
+    dateToTimestampEnd,
+    dateToTimestampStart,
+    mergePatch,
+    timestampToDateInput,
+    toggleArrayValue,
+} from '../services/filterUtils';
+import type { TagMatchMode, TaskPriority, TaskSearchFilter, TaskStatus } from '../types/task';
+import AppIcon from './AppIcon.vue';
 
 	const props = defineProps<{
 		modelValue: TaskSearchFilter;
@@ -84,7 +84,12 @@
 
 	const toggleTag = (tag: string): void => {
 		const arr = toggleArrayValue(props.modelValue.tags, tag);
-		emit('update:modelValue', mergePatch(props.modelValue, { tags: arr }));
+		emit(
+			'update:modelValue',
+			arr
+				? mergePatch(props.modelValue, { tags: arr })
+				: mergePatch(props.modelValue, { tags: undefined, tagMatchMode: undefined }),
+		);
 	};
 
 	const dateStartIso = computed<string>({

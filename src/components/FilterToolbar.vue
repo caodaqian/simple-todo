@@ -19,15 +19,51 @@ import FilterPanel from './FilterPanel.vue';
 	const triggerRef = ref<HTMLElement | null>(null);
 	const popoverRef = ref<HTMLElement | null>(null);
 	const filterPanelRef = ref<InstanceType<typeof FilterPanel> | null>(null);
+	const popoverStyle = ref({ left: '8px', top: '8px', maxHeight: 'calc(100dvh - 16px)' });
 
 	const activeCount = computed(() => countActiveFilterFields(props.modelValue));
 
 	const toggle = (): void => {
-		open.value = !open.value;
+		if (open.value) {
+			close();
+			return;
+		}
+		open.value = true;
+		void nextTick(positionPopover);
 	};
 
 	const close = (): void => {
 		open.value = false;
+	};
+
+	const positionPopover = (): void => {
+		const trigger = triggerRef.value;
+		const popover = popoverRef.value;
+		if (!open.value || !trigger || !popover) return;
+
+		const padding = 8;
+		const gap = 6;
+		const triggerRect = trigger.getBoundingClientRect();
+		const popoverWidth = popover.offsetWidth;
+		const popoverHeight = popover.offsetHeight;
+		const availableBelow = window.innerHeight - triggerRect.bottom - gap - padding;
+		const availableAbove = triggerRect.top - gap - padding;
+		const openAbove = availableBelow < Math.min(popoverHeight, 320) && availableAbove > availableBelow;
+		const availableHeight = Math.max(160, openAbove ? availableAbove : availableBelow);
+		const height = Math.min(popoverHeight, availableHeight);
+		const top = openAbove
+			? Math.max(padding, triggerRect.top - gap - height)
+			: Math.min(triggerRect.bottom + gap, window.innerHeight - padding - height);
+		const left = Math.min(
+			Math.max(padding, triggerRect.right - popoverWidth),
+			window.innerWidth - padding - popoverWidth,
+		);
+
+		popoverStyle.value = {
+			left: `${left}px`,
+			top: `${top}px`,
+			maxHeight: `${availableHeight}px`,
+		};
 	};
 
 	const handleDocClick = (event: MouseEvent): void => {
@@ -45,12 +81,20 @@ import FilterPanel from './FilterPanel.vue';
 		if (event.key === 'Escape') close();
 	};
 
+	const handleViewportChange = (): void => {
+		void nextTick(positionPopover);
+	};
+
 	document.addEventListener('mousedown', handleDocClick);
 	document.addEventListener('keydown', handleEsc);
+	window.addEventListener('resize', handleViewportChange);
+	window.addEventListener('scroll', handleViewportChange, true);
 
 	onBeforeUnmount(() => {
 		document.removeEventListener('mousedown', handleDocClick);
 		document.removeEventListener('keydown', handleEsc);
+		window.removeEventListener('resize', handleViewportChange);
+		window.removeEventListener('scroll', handleViewportChange, true);
 	});
 
 	const update = (next: TaskSearchFilter): void => {
@@ -64,6 +108,7 @@ import FilterPanel from './FilterPanel.vue';
 	const focusKeywordSearch = (): void => {
 		open.value = true;
 		void nextTick(() => {
+			positionPopover();
 			filterPanelRef.value?.focusKeywordInput();
 		});
 	};
@@ -91,7 +136,7 @@ import FilterPanel from './FilterPanel.vue';
 			<AppIcon name="chevronDown" :size="12" class="filter-trigger__caret" :class="{ open }" />
 		</button>
 
-		<div v-show="open" ref="popoverRef" class="filter-popover" role="presentation">
+		<div v-show="open" ref="popoverRef" class="filter-popover" :style="popoverStyle" role="presentation">
 			<FilterPanel
 ref="filterPanelRef"
 				:model-value="modelValue"
@@ -149,15 +194,12 @@ ref="filterPanelRef"
 	}
 
 	.filter-popover {
-		position: absolute;
-		top: calc(100% + 6px);
-		left: 0;
+		position: fixed;
 		z-index: var(--z-popover, 50);
 		background: var(--color-bg-elevated, var(--color-bg-base));
 		border: 1px solid var(--color-border-default);
 		border-radius: var(--radius-md);
 		box-shadow: var(--shadow-md);
-		max-height: 70vh;
 		overflow-y: auto;
 	}
 </style>

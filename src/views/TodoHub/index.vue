@@ -6,11 +6,17 @@ import PomodoroStatusPill from '../../components/PomodoroStatusPill.vue';
 import SettingsPanel from '../../components/SettingsPanel.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
 import TaskReviewPanel from '../../components/TaskReviewPanel.vue';
-  import TemplateLibraryPanel from '../../components/TemplateLibraryPanel.vue';
+import TemplateLibraryPanel from '../../components/TemplateLibraryPanel.vue';
 import { useImeGuard } from '../../composables/useImeGuard';
 import { catchUpReminders, useReminderScheduler } from '../../composables/useReminderScheduler';
 import { useUtoolsTaskSearch } from '../../composables/useUtoolsTaskSearch';
-import { mergePatch, toggleArrayValue } from '../../services/filterUtils';
+import {
+    hasActiveSidebarFilters,
+    isSidebarFilterActive,
+    mergePatch,
+    toggleArrayValue,
+    toggleSidebarFilter,
+} from '../../services/filterUtils';
 import {
     extractTaskGroups,
     extractTaskTags,
@@ -26,7 +32,7 @@ import { openStickyNoteWindow } from '../../services/stickyWindowService';
 import { taskService } from '../../services/taskService';
 import { uiStateService } from '../../services/uiStateService';
 import type { AppSettings, SavedFilterView, TodoView } from '../../types/settings';
-import type { Task, TaskSearchFilter, TaskSortOption } from '../../types/task';
+import type { Task, TaskPriority, TaskSearchFilter, TaskSortOption, TaskStatus } from '../../types/task';
 import type { SideSection } from '../../types/uiState';
 import CalendarView from '../CalendarView/index.vue';
 import EisenhowerView from '../EisenhowerView/index.vue';
@@ -86,6 +92,72 @@ import ListView from '../ListView/index.vue';
   }));
 
   const activeTags = computed<string[]>(() => activeFilter.value.tags ?? []);
+
+  type ActiveFilterChip = {
+    id: string;
+    label: string;
+    remove: () => void;
+  };
+
+  const priorityLabels: Record<TaskPriority, string> = {
+    low: '低',
+    medium: '中',
+    high: '高',
+    urgent: '紧急',
+  };
+
+  const statusLabels: Record<TaskStatus, string> = {
+    todo: '待办',
+    doing: '进行中',
+    done: '已完成',
+  };
+
+  const formatDate = (timestamp: number): string => new Date(timestamp).toLocaleDateString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+  });
+
+  const activeFilterChips = computed<ActiveFilterChip[]>(() => {
+    const filter = activeFilter.value;
+    const chips: ActiveFilterChip[] = [];
+    if (filter.keyword) {
+      chips.push({ id: 'keyword', label: `关键词：${filter.keyword}`, remove: () => { activeFilter.value = mergePatch(activeFilter.value, { keyword: undefined }); } });
+    }
+    if (filter.titleKeyword) {
+      chips.push({ id: 'titleKeyword', label: `标题：${filter.titleKeyword}`, remove: () => { activeFilter.value = mergePatch(activeFilter.value, { titleKeyword: undefined }); } });
+    }
+    if (filter.priority) {
+      const priorities = Array.isArray(filter.priority) ? filter.priority : [filter.priority];
+      chips.push({ id: 'priority', label: `优先级：${priorities.map((item) => priorityLabels[item]).join('、')}`, remove: () => { activeFilter.value = mergePatch(activeFilter.value, { priority: undefined }); } });
+    }
+    if (filter.status) {
+      const statuses = Array.isArray(filter.status) ? filter.status : [filter.status];
+      chips.push({ id: 'status', label: `状态：${statuses.map((item) => statusLabels[item]).join('、')}`, remove: () => { activeFilter.value = mergePatch(activeFilter.value, { status: undefined }); } });
+    }
+    if (filter.dateRange) {
+      const { start, end } = filter.dateRange;
+      const label = start !== undefined && end !== undefined
+        ? `截止：${formatDate(start)} - ${formatDate(end)}`
+        : start !== undefined ? `截止：${formatDate(start)} 起` : `截止：${formatDate(end!)} 前`;
+      chips.push({ id: 'dateRange', label, remove: () => { activeFilter.value = mergePatch(activeFilter.value, { dateRange: undefined }); } });
+    }
+    if (filter.overdueOnly) {
+      chips.push({ id: 'overdue', label: '已过期', remove: () => { activeFilter.value = mergePatch(activeFilter.value, { overdueOnly: undefined }); } });
+    }
+    if (filter.group) {
+      chips.push({ id: 'group', label: `分组：${filter.group}`, remove: () => { activeFilter.value = mergePatch(activeFilter.value, { group: undefined }); } });
+    }
+    for (const tag of filter.tags ?? []) {
+      chips.push({ id: `tag:${tag}`, label: `#${tag}`, remove: () => { toggleTagFilter(tag); } });
+    }
+    if (filter.archived) {
+      chips.push({ id: 'archived', label: '已归档', remove: () => { activeFilter.value = mergePatch(activeFilter.value, { archived: undefined }); } });
+    }
+    if (filter.showCompleted && filter.status === undefined) {
+      chips.push({ id: 'showCompleted', label: '显示已完成', remove: () => { activeFilter.value = mergePatch(activeFilter.value, { showCompleted: undefined }); } });
+    }
+    return chips;
+  });
 
   /* ── Saved filter views ─────────────────────────────────────── */
   const savedViews = computed(() => settings.value.savedViews);
@@ -193,48 +265,31 @@ import ListView from '../ListView/index.vue';
   /* ── Groups in sidebar ────────────────────────────────────── */
   const allGroups = computed(() => extractTaskGroups(activeTasks.value));
 
-  /* ── Section presets：点击侧边栏节点即把对应 filter 预设写入 activeFilter ── */
-  const buildSectionPreset = (section: SideSection): TaskSearchFilter => {
-    const rules = getTaskDateRules();
-    const base: TaskSearchFilter = {};
+  const isSectionActive = (section: SideSection): boolean =>
+    isSidebarFilterActive(activeFilter.value, section, getTaskDateRules());
 
-    switch (section) {
-      case 'today':
-        return { ...base, dateRange: { start: rules.startOfToday, end: rules.endOfToday }, status: ['todo', 'doing'] };
-      case 'week':
-        return { ...base, dateRange: { start: rules.startOfToday, end: rules.endOfRecentDays }, status: ['todo', 'doing'] };
-      case 'overdue':
-        return { ...base, overdueOnly: true, status: ['todo', 'doing'] };
-      case 'inbox':
-        return base;
-      case 'done':
-        return { ...base, showCompleted: true, status: 'done' };
-      case 'archived':
-        return { ...base, archived: true, showCompleted: true };
-      default:
-        if (section.startsWith('tag:')) {
-          const tag = section.slice(4);
-          return { ...base, tags: [tag] };
-        }
-        if (section.startsWith('group:')) {
-          const group = section.slice(6);
-          return { ...base, group };
-        }
-        return base;
-    }
-  };
+  const isGroupActive = (group: string): boolean => isSectionActive(`group:${group}`);
+
+  const isTagActive = (tag: string): boolean => isSectionActive(`tag:${tag}`);
 
   const selectSection = (section: SideSection): void => {
-    activeSection.value = section;
-    activeFilter.value = buildSectionPreset(section);
+    const rules = getTaskDateRules();
+    const nextFilter = toggleSidebarFilter(activeFilter.value, section, rules);
+    activeFilter.value = nextFilter;
+    activeSection.value = hasActiveSidebarFilters(nextFilter, rules) ? section : 'inbox';
   };
 
   /* ── Section label for header ─────────────────────────────────── */
   const sectionLabel = computed(() => {
-    const s = activeSection.value;
-    if (s.startsWith('tag:')) return `#${s.slice(4)}`;
-    if (s.startsWith('group:')) return `~${s.slice(6)}`;
-    return sideSections.find(x => x.key === s)?.label ?? '收集箱';
+    const activeLabels = [
+      ...sideSections
+        .filter((section) => section.key !== 'inbox' && isSectionActive(section.key))
+        .map((section) => section.label),
+      ...allGroups.value.filter((group) => isGroupActive(group.name)).map((group) => `~${group.name}`),
+      ...allTags.value.filter((tag) => isTagActive(tag.name)).map((tag) => `#${tag.name}`),
+    ];
+    if (activeLabels.length === 0) return '收集箱';
+    return activeLabels.length === 1 ? activeLabels[0] ?? '收集箱' : '筛选结果';
   });
 
   /* ── Stats per section ────────────────────────────────────────── */
@@ -266,7 +321,9 @@ import ListView from '../ListView/index.vue';
   /* ── Tag filter toggle ────────────────────────────────────────── */
   const toggleTagFilter = (tag: string) => {
     const next = toggleArrayValue(activeFilter.value.tags, tag);
-    activeFilter.value = mergePatch(activeFilter.value, { tags: next });
+    activeFilter.value = next
+      ? mergePatch(activeFilter.value, { tags: next })
+      : mergePatch(activeFilter.value, { tags: undefined, tagMatchMode: undefined });
   };
 
   const resetActiveFilter = (): void => {
@@ -395,7 +452,9 @@ import ListView from '../ListView/index.vue';
       <!-- Sections -->
       <div class="sidebar-sections">
         <button v-for="sec in sideSections" :key="sec.key" class="sidebar-item"
-          :class="{ active: activeSection === sec.key }" :aria-label="sec.label"
+          :class="{ active: sec.key === 'inbox' ? !hasActiveSidebarFilters(activeFilter, getTaskDateRules()) : isSectionActive(sec.key) }"
+          :aria-current="(sec.key === 'inbox' ? !hasActiveSidebarFilters(activeFilter, getTaskDateRules()) : isSectionActive(sec.key)) ? 'true' : undefined"
+          :aria-label="sec.label"
           @click="selectSection(sec.key)">
           <span class="sidebar-item-icon"><AppIcon :name="sec.icon" :size="16" /></span>
           <span class="sidebar-item-label">{{ sec.label }}</span>
@@ -411,7 +470,8 @@ import ListView from '../ListView/index.vue';
           <span class="section-label">分组</span>
         </div>
         <button v-for="group in allGroups" :key="group.name" class="sidebar-item sidebar-group-item"
-          :class="{ active: activeSection === `group:${group.name}` }" :aria-label="`分组 ${group.name}`"
+          :class="{ active: isGroupActive(group.name) }" :aria-current="isGroupActive(group.name) ? 'true' : undefined"
+          :aria-label="`分组 ${group.name}`"
           @click="selectSection(`group:${group.name}`)">
           <span class="sidebar-item-icon"><AppIcon name="folder" :size="14" /></span>
           <span class="sidebar-item-label">{{ group.name }}</span>
@@ -426,7 +486,8 @@ import ListView from '../ListView/index.vue';
           <span class="section-label">标签</span>
         </div>
         <button v-for="tag in allTags" :key="tag.name" class="sidebar-item sidebar-tag-item"
-          :class="{ active: activeSection === `tag:${tag.name}` }" :aria-label="`标签 ${tag.name}`"
+          :class="{ active: isTagActive(tag.name) }" :aria-current="isTagActive(tag.name) ? 'true' : undefined"
+          :aria-label="`标签 ${tag.name}`"
           @click="selectSection(`tag:${tag.name}`)">
           <span class="sidebar-item-icon"><AppIcon name="hash" :size="14" /></span>
           <span class="sidebar-item-label">{{ tag.name }}</span>
@@ -499,10 +560,12 @@ import ListView from '../ListView/index.vue';
       <header class="hub-header">
         <h1 class="hub-title">{{ sectionLabel }}</h1>
 
-        <!-- Active tag filter chips -->
-        <div v-if="activeTags.length > 0" class="hub-header__chips">
-          <span v-for="tag in activeTags" :key="tag" class="tag-chip removable"
-            @click="toggleTagFilter(tag)">#{{ tag }} <AppIcon name="x" :size="12" /></span>
+        <!-- Active filter chips -->
+        <div v-if="activeFilterChips.length > 0" class="hub-header__chips" aria-label="已生效筛选条件">
+          <button v-for="chip in activeFilterChips" :key="chip.id" type="button" class="tag-chip removable"
+            :title="`移除${chip.label}`" @click="chip.remove()">
+            {{ chip.label }} <AppIcon name="x" :size="12" />
+          </button>
         </div>
 
         <div class="hub-header__spacer" />
