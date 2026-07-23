@@ -30,7 +30,14 @@ const isTodoView = (value: unknown): value is TodoView => {
 	return value === 'list' || value === 'kanban' || value === 'eisenhower' || value === 'calendar';
 };
 
-const cloneFilter = (filter: TaskSearchFilter): TaskSearchFilter => ({ ...filter });
+const cloneFilter = (filter: TaskSearchFilter): TaskSearchFilter => {
+	const cloned: TaskSearchFilter = { ...filter };
+	if (filter.tags !== undefined) cloned.tags = [...filter.tags];
+	if (filter.dateRange !== undefined) cloned.dateRange = { ...filter.dateRange };
+	if (Array.isArray(filter.status)) cloned.status = [...filter.status];
+	if (Array.isArray(filter.priority)) cloned.priority = [...filter.priority];
+	return cloned;
+};
 const cloneSort = (sort: TaskSortOption | undefined): TaskSortOption | undefined => sort ? { ...sort } : undefined;
 
 const cloneSource = (source: StickyNoteSource): StickyNoteSource => {
@@ -94,16 +101,18 @@ class StickyNoteService {
 		}
 	}
 
-	saveSource(source: StickyNoteSource): void {
+	saveSource(source: StickyNoteSource): StickyNoteSource {
 		const next = cloneSource(source);
 		this.memorySource = next;
 		const localStorage = this.getLocalStorage();
-		if (!localStorage) return;
-		try {
-			localStorage.setItem(this.storageKey, JSON.stringify(next));
-		} catch {
-			// Keep memory fallback when localStorage fails.
+		if (localStorage) {
+			try {
+				localStorage.setItem(this.storageKey, JSON.stringify(next));
+			} catch {
+		// Keep memory fallback when localStorage fails.
+			}
 		}
+		return cloneSource(next);
 	}
 
 	buildSourceFromCurrent(input: StickyCurrentSourceInput): StickyNoteSource {

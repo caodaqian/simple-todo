@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { reactive } from 'vue';
 import type { StickyNoteSource } from '../types/stickyNote';
 
 const source: StickyNoteSource = {
@@ -57,6 +58,39 @@ describe('stickyWindowService', () => {
 			senderId: expect.stringMatching(/^sticky-/),
 		}));
 		expect(hideMainWindow).toHaveBeenCalledWith(true);
+	});
+
+	it('sends a structured-cloneable payload when the source contains reactive filters', async () => {
+		const send = vi.fn((_: string, payload: unknown) => {
+			structuredClone(payload);
+		});
+		const createBrowserWindow = vi.fn((_url: string, _options: Record<string, unknown>, callback?: () => void) => {
+			const windowLike = { show: vi.fn(), setAlwaysOnTop: vi.fn(), isDestroyed: () => false, webContents: { send } };
+			callback?.();
+			return windowLike;
+		});
+		window.utools = {
+			...(window.utools ?? {}),
+			createBrowserWindow,
+		} as unknown as typeof window.utools;
+
+		const { openStickyNoteWindow } = await import('./stickyWindowService');
+		const reactiveSource = reactive({
+			...source,
+			filter: {
+				tags: ['work'],
+				dateRange: { start: 1, end: 2 },
+			},
+		});
+
+		openStickyNoteWindow(reactiveSource);
+
+		expect(send).toHaveBeenCalledWith('window', expect.objectContaining({
+			type: 'sticky-note',
+			source: expect.objectContaining({
+				filter: { tags: ['work'], dateRange: { start: 1, end: 2 } },
+			}),
+		}));
 	});
 
 	it('creates the sticky window visible instead of relying on a hidden load callback', async () => {

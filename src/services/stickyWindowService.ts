@@ -87,8 +87,7 @@ const canReuseWindow = (win: BrowserWindowLike | null): win is BrowserWindowLike
 };
 
 export const openStickyNoteWindow = (source: StickyNoteSource): StickyWindowOpenResult => {
-	const nextSource = { ...source, updatedAt: Date.now() };
-	stickyNoteService.saveSource(nextSource);
+	const nextSource = stickyNoteService.saveSource({ ...source, updatedAt: Date.now() });
 	const utools = (window as Window & { utools?: UtoolsWindowLike }).utools;
 	const payload = createInitPayload(nextSource);
 
