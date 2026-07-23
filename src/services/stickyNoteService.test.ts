@@ -72,6 +72,7 @@ describe('stickyNoteService', () => {
 		const savedView: SavedFilterView = {
 			id: 'view-1',
 			name: '前端看板',
+			starred: false,
 			view: 'kanban',
 			section: 'tag:frontend',
 			filter: { tags: ['frontend'] },

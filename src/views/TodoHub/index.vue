@@ -3,11 +3,11 @@
 import AppIcon from '../../components/AppIcon.vue';
 import FilterToolbar from '../../components/FilterToolbar.vue';
 import PomodoroStatusPill from '../../components/PomodoroStatusPill.vue';
+import SavedViewDialog from '../../components/SavedViewDialog.vue';
 import SettingsPanel from '../../components/SettingsPanel.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
 import TaskReviewPanel from '../../components/TaskReviewPanel.vue';
 import TemplateLibraryPanel from '../../components/TemplateLibraryPanel.vue';
-import { useImeGuard } from '../../composables/useImeGuard';
 import { catchUpReminders, useReminderScheduler } from '../../composables/useReminderScheduler';
 import { useUtoolsTaskSearch } from '../../composables/useUtoolsTaskSearch';
 import {
@@ -48,6 +48,7 @@ import ListView from '../ListView/index.vue';
   const initialTemplateId = ref<string | undefined>(undefined);
   const newTaskMenuOpen = ref(false);
   const reviewPanelVisible = ref(false);
+  const savedViewDialogVisible = ref(false);
   const tasks = ref<Task[]>([]);
 
   // 视图状态：从持久化 uiState 恢复"上次视图"，重启后保持 currentView/分区/筛选/排序。
@@ -160,48 +161,22 @@ import ListView from '../ListView/index.vue';
   });
 
   /* ── Saved filter views ─────────────────────────────────────── */
-  const savedViews = computed(() => settings.value.savedViews);
-  const savingViewMode = ref(false);
-  const newViewName = ref('');
-  const savedViewInputRef = ref<HTMLInputElement | null>(null);
-  const savedViewImeGuard = useImeGuard();
+  const starredViews = computed(() => settings.value.savedViews.filter((view) => view.starred));
+  const savedViews = computed(() => settings.value.savedViews.filter((view) => !view.starred));
 
-  const saveCurrentView = (): void => {
-    savingViewMode.value = true;
-    newViewName.value = sectionLabel.value;
-    requestAnimationFrame(() => {
-      savedViewInputRef.value?.focus();
-      savedViewInputRef.value?.select();
-    });
-  };
-
-  const confirmSaveView = (): void => {
-    const name = newViewName.value.trim();
-    if (!name) {
-      savingViewMode.value = false;
-      return;
-    }
-
-    settingsService.saveView(name, {
+  const handleSavedViewSave = (payload: {
+    name: string;
+    filter: TaskSearchFilter;
+    sort: TaskSortOption;
+  }): void => {
+    settingsService.saveView(payload.name, {
       view: currentView.value,
       section: activeSection.value,
-      filter: { ...activeFilter.value },
-      sort: { ...activeSort.value },
+      filter: payload.filter,
+      sort: payload.sort,
     });
     settings.value = settingsService.getSettings();
-    savingViewMode.value = false;
-    newViewName.value = '';
-  };
-
-  const onSavedViewKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Enter' || savedViewImeGuard.shouldIgnoreKeydown(event)) return;
-    event.preventDefault();
-    confirmSaveView();
-  };
-
-  const cancelSaveView = (): void => {
-    savingViewMode.value = false;
-    newViewName.value = '';
+    savedViewDialogVisible.value = false;
   };
 
   const applySavedView = (view: SavedFilterView): void => {
@@ -215,6 +190,11 @@ import ListView from '../ListView/index.vue';
 
   const deleteSavedView = (id: string): void => {
     settingsService.deleteView(id);
+    settings.value = settingsService.getSettings();
+  };
+
+  const toggleSavedViewStar = (id: string): void => {
+    settingsService.toggleViewStar(id);
     settings.value = settingsService.getSettings();
   };
 
@@ -438,6 +418,40 @@ import ListView from '../ListView/index.vue';
 
     <!-- ── Sidebar ──────────────────────────────────────────── -->
     <aside class="hub-sidebar">
+      <!-- Starred saved views -->
+      <div v-if="starredViews.length > 0" class="sidebar-starred-views">
+        <div class="sidebar-tags-header">
+          <span class="section-label">星标视图</span>
+        </div>
+
+        <div v-for="view in starredViews" :key="view.id" class="sidebar-saved-row">
+          <button
+            type="button"
+            class="sidebar-item sidebar-saved-item"
+            :title="`${view.name} · ${view.view}`"
+            @click="applySavedView(view)"
+          >
+            <span class="sidebar-item-icon"><AppIcon name="star" :size="14" :fill="'currentColor'" /></span>
+            <span class="sidebar-item-label">{{ view.name }}</span>
+          </button>
+          <button
+            type="button"
+            class="saved-view-action saved-view-star active"
+            :title="`取消星标视图 ${view.name}`"
+            :aria-label="`取消星标视图 ${view.name}`"
+            @click.stop="toggleSavedViewStar(view.id)"
+          >
+            <AppIcon name="star" :size="12" :fill="'currentColor'" />
+          </button>
+          <button type="button" class="saved-view-action" :title="`打开便签 ${view.name}`" :aria-label="`打开便签 ${view.name}`" @click.stop="openSavedStickyNote(view)">
+            <AppIcon name="pin" :size="12" />
+          </button>
+          <button type="button" class="saved-view-action saved-view-delete" :title="`删除视图 ${view.name}`" :aria-label="`删除视图 ${view.name}`" @click.stop="deleteSavedView(view.id)">
+            <AppIcon name="x" :size="12" />
+          </button>
+        </div>
+      </div>
+
       <!-- View mode icons -->
       <nav class="sidebar-views view-tabs" aria-label="视图切换">
         <button v-for="tab in viewTabs" :key="tab.key" class="view-tab"
@@ -500,25 +514,9 @@ import ListView from '../ListView/index.vue';
       <div class="sidebar-saved-views">
         <div class="sidebar-tags-header">
           <span class="section-label">保存视图</span>
-          <button class="view-icon-btn save-view-trigger" title="保存当前视图" @click="saveCurrentView">
+          <button class="view-icon-btn save-view-trigger" title="保存当前视图" @click="savedViewDialogVisible = true">
             <AppIcon name="plus" :size="14" />
           </button>
-        </div>
-
-        <div v-if="savingViewMode" class="saved-view-form">
-          <label class="sr-only" for="saved-view-name-input">视图名称</label>
-          <input
-            id="saved-view-name-input"
-            ref="savedViewInputRef"
-            v-model.trim="newViewName"
-            type="text"
-            placeholder="视图名称"
-            @keydown="onSavedViewKeydown"
-            @compositionstart="savedViewImeGuard.onCompositionStart"
-            @compositionend="savedViewImeGuard.onCompositionEnd"
-            @keydown.esc="cancelSaveView"
-            @blur="cancelSaveView"
-          />
         </div>
 
         <div
@@ -535,14 +533,24 @@ import ListView from '../ListView/index.vue';
             <span class="sidebar-item-icon"><AppIcon name="bookmark" :size="14" /></span>
             <span class="sidebar-item-label">{{ view.name }}</span>
           </button>
-          <button type="button" class="saved-view-delete" :title="`删除视图 ${view.name}`" :aria-label="`删除视图 ${view.name}`" @click.stop="deleteSavedView(view.id)">
-            <AppIcon name="x" :size="12" />
+          <button
+            type="button"
+            class="saved-view-action saved-view-star"
+            :class="{ active: view.starred }"
+            :title="view.starred ? `取消星标视图 ${view.name}` : `星标视图 ${view.name}`"
+            :aria-label="view.starred ? `取消星标视图 ${view.name}` : `星标视图 ${view.name}`"
+            @click.stop="toggleSavedViewStar(view.id)"
+          >
+            <AppIcon name="star" :size="12" :fill="view.starred ? 'currentColor' : 'none'" />
           </button>
-          <button type="button" class="saved-view-delete" :title="`打开便签 ${view.name}`" :aria-label="`打开便签 ${view.name}`" @click.stop="openSavedStickyNote(view)">
+          <button type="button" class="saved-view-action" :title="`打开便签 ${view.name}`" :aria-label="`打开便签 ${view.name}`" @click.stop="openSavedStickyNote(view)">
             <AppIcon name="pin" :size="12" />
           </button>
+          <button type="button" class="saved-view-action saved-view-delete" :title="`删除视图 ${view.name}`" :aria-label="`删除视图 ${view.name}`" @click.stop="deleteSavedView(view.id)">
+            <AppIcon name="x" :size="12" />
+          </button>
         </div>
-        <p v-if="savedViews.length === 0 && !savingViewMode" class="sidebar-empty-hint">暂无保存视图</p>
+        <p v-if="savedViews.length === 0" class="sidebar-empty-hint">暂无保存视图</p>
       </div>
 
       <!-- Bottom actions -->
@@ -587,6 +595,7 @@ import ListView from '../ListView/index.vue';
 ref="filterToolbarRef"
           v-model="activeFilter"
           :available-tags="allTags.map(t => t.name)"
+          :available-groups="allGroups.map(group => group.name)"
           @reset="resetActiveFilter"
         />
 
@@ -647,6 +656,16 @@ ref="filterToolbarRef"
     <TemplateLibraryPanel v-model="templateLibraryVisible" :mode="templateLibraryMode" @select="createFromTemplate" />
     <SettingsPanel v-model="settingsPanelVisible" :settings="settings" @change="handleSettingsChange"
       @refresh="loadTasks" />
+    <SavedViewDialog
+      v-model="savedViewDialogVisible"
+      :view="currentView"
+      :initial-name="sectionLabel"
+      :initial-filter="activeFilter"
+      :initial-sort="activeSort"
+      :available-tags="allTags.map(tag => tag.name)"
+      :available-groups="allGroups.map(group => group.name)"
+      @save="handleSavedViewSave"
+    />
   </div>
 </template>
 
@@ -804,6 +823,15 @@ ref="filterToolbarRef"
   }
 
   /* Saved views */
+  .sidebar-starred-views {
+    padding: 8px 8px 4px;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .sidebar-starred-views .section-label {
+    color: var(--color-accent);
+  }
+
   .sidebar-saved-views {
     padding: 4px 8px 8px;
     border-top: 1px solid var(--color-border-subtle);
@@ -814,27 +842,6 @@ ref="filterToolbarRef"
     height: 20px;
     font-size: 14px;
     line-height: 1;
-  }
-
-  .saved-view-form {
-    padding: 4px 8px 8px;
-  }
-
-  .saved-view-form input {
-    width: 100%;
-    height: 28px;
-    padding: 4px 8px;
-    font-size: 12px;
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-sm);
-    background: var(--color-bg-input);
-    color: var(--color-text-primary);
-    box-sizing: border-box;
-  }
-
-  .saved-view-form input:focus {
-    outline: none;
-    border-color: var(--color-accent);
   }
 
   .sidebar-saved-row {
@@ -850,7 +857,7 @@ ref="filterToolbarRef"
     font-size: 13px;
   }
 
-  .saved-view-delete {
+  .saved-view-action {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -867,9 +874,18 @@ ref="filterToolbarRef"
     transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
   }
 
-  .sidebar-saved-row:hover .saved-view-delete,
-  .sidebar-saved-row:focus-within .saved-view-delete {
+  .sidebar-saved-row:hover .saved-view-action,
+  .sidebar-saved-row:focus-within .saved-view-action {
     opacity: 1;
+  }
+
+  .saved-view-action:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+  }
+
+  .saved-view-star.active {
+    color: var(--color-accent);
   }
 
   .saved-view-delete:hover {
@@ -1093,6 +1109,7 @@ ref="filterToolbarRef"
 
     .sidebar-groups-section,
     .sidebar-tags-section,
+    .sidebar-starred-views,
     .sidebar-saved-views,
     .sidebar-bottom {
       display: none;

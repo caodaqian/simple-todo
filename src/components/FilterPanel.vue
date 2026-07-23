@@ -17,6 +17,7 @@ import AppIcon from './AppIcon.vue';
 	const props = defineProps<{
 		modelValue: TaskSearchFilter;
 		availableTags?: string[];
+		availableGroups?: string[];
 	}>();
 
 	const emit = defineEmits<{
@@ -73,6 +74,10 @@ import AppIcon from './AppIcon.vue';
 			| TaskStatus[]
 			| undefined;
 		emit('update:modelValue', mergePatch(props.modelValue, { status: arr }));
+	};
+
+	const setGroup = (group: string | undefined): void => {
+		emit('update:modelValue', mergePatch(props.modelValue, { group }));
 	};
 
 	const matchMode = computed<TagMatchMode>({
@@ -160,6 +165,21 @@ import AppIcon from './AppIcon.vue';
 					:class="[`chip--status-${s}`, { 'chip--active': isStatusSelected(s) }]"
 					@click="toggleStatus(s)">
 					{{ statusLabels[s] }}
+				</button>
+			</div>
+		</div>
+
+		<!-- 分组 -->
+		<div v-if="(availableGroups?.length ?? 0) > 0" class="filter-row">
+			<span class="filter-row__label">分组</span>
+			<div class="filter-row__control chip-group">
+				<button type="button" class="chip" :class="{ 'chip--active': modelValue.group === undefined }"
+					@click="setGroup(undefined)">
+					全部分组
+				</button>
+				<button v-for="group in availableGroups" :key="group" type="button" class="chip"
+					:class="{ 'chip--active': modelValue.group === group }" @click="setGroup(group)">
+					{{ group }}
 				</button>
 			</div>
 		</div>

@@ -32,6 +32,7 @@ import type { TaskSearchFilter, TaskSortOption } from './task';
 export interface SavedFilterView {
 	id: string;
 	name: string;
+	starred: boolean;
 	view: TodoView;
 	section: string;
 	filter: TaskSearchFilter;

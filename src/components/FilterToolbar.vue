@@ -8,6 +8,7 @@ import FilterPanel from './FilterPanel.vue';
 	const props = defineProps<{
 		modelValue: TaskSearchFilter;
 		availableTags?: string[];
+		availableGroups?: string[];
 	}>();
 
 	const emit = defineEmits<{
@@ -141,6 +142,7 @@ import FilterPanel from './FilterPanel.vue';
 ref="filterPanelRef"
 				:model-value="modelValue"
 				:available-tags="availableTags ?? []"
+				:available-groups="availableGroups ?? []"
 				@update:model-value="update"
 				@reset="reset"
 			/>

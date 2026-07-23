@@ -23,7 +23,7 @@ class MockDbStorage {
 	}
 }
 
-const createViewSnapshot = (overrides: Partial<Omit<SavedFilterView, 'id' | 'name'>> = {}): Omit<SavedFilterView, 'id' | 'name'> => ({
+const createViewSnapshot = (overrides: Partial<Omit<SavedFilterView, 'id' | 'name' | 'starred'>> = {}): Omit<SavedFilterView, 'id' | 'name' | 'starred'> => ({
 	view: 'list' as TodoView,
 	section: 'inbox',
 	filter: {},
@@ -185,10 +185,28 @@ describe('settingsService', () => {
 		expect(saved.section).toBe('tag:frontend');
 		expect(saved.filter).toEqual(filter);
 		expect(saved.sort).toEqual(createSort('priority'));
+		expect(saved.starred).toBe(false);
 
 		const views = settingsService.getViews();
 		expect(views).toHaveLength(1);
 		expect(views[0]).toEqual(saved);
+	});
+
+	it('normalizes a legacy saved view without starred as unstarred', () => {
+		const legacy = {
+			id: 'view-without-starred',
+			name: '旧保存视图',
+			view: 'list',
+			section: 'inbox',
+			filter: { tags: ['bug'] },
+		};
+		dbStorage.setItem(
+			'jianyue.settings',
+			JSON.stringify({ ...DEFAULT_SETTINGS, savedViews: [legacy] }),
+		);
+
+		const [saved] = settingsService.getViews();
+		expect(saved?.starred).toBe(false);
 	});
 
 	it('migrates legacy savedViews using tagFilter/showCompleted into the new filter shape', () => {
@@ -211,8 +229,30 @@ describe('settingsService', () => {
 		expect(migrated.id).toBe('view-legacy-1');
 		expect(migrated.filter.tags).toEqual(['bug']);
 		expect(migrated.filter.showCompleted).toBe(true);
+		expect(migrated.starred).toBe(false);
 		// 旧字段不再被期待存在；但即使残留也是可读的
 		expect(migrated.view).toBe('list');
+	});
+
+	it('toggles one saved view star without changing other views or their order', () => {
+		const first = settingsService.saveView('视图一', createViewSnapshot());
+		const target = settingsService.saveView('视图二', createViewSnapshot({ view: 'kanban' }));
+		const last = settingsService.saveView('视图三', createViewSnapshot({ view: 'calendar' }));
+
+		const toggled = settingsService.toggleViewStar(target.id);
+
+		expect(toggled).toEqual({ ...target, starred: true });
+		expect(settingsService.getViews()).toEqual([
+			first,
+			{ ...target, starred: true },
+			last,
+		]);
+	});
+
+	it('returns null when toggling a non-existent saved view star', () => {
+		settingsService.saveView('视图一', createViewSnapshot());
+
+		expect(settingsService.toggleViewStar('non-existent-id')).toBeNull();
 	});
 
 	it('deletes an existing view', () => {
@@ -238,6 +278,7 @@ describe('settingsService', () => {
 			view: 'list',
 			section: 'today',
 			filter: { tags: ['bug'] },
+			starred: false,
 		};
 
 		const invalidItems = [

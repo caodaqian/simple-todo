@@ -105,27 +105,36 @@ const migrateLegacyView = (value: Record<string, unknown>): SavedFilterView | nu
 	return {
 		id,
 		name,
+		starred: false,
 		view,
 		section,
 		filter,
 	};
 };
 
-const isSavedFilterView = (value: unknown): value is SavedFilterView => {
+const parseSavedFilterView = (value: unknown): SavedFilterView | null => {
 	if (!isObjectRecord(value)) {
-		return false;
+		return null;
 	}
 
 	const { id, name, view, section, filter } = value;
 
-	if (typeof id !== 'string' || id.length === 0) return false;
-	if (typeof name !== 'string' || name.length === 0) return false;
-	if (!isTodoView(view)) return false;
-	if (typeof section !== 'string') return false;
-	if (!isTaskSearchFilter(filter)) return false;
-	if (value.sort !== undefined && !isSortOption(value.sort)) return false;
+	if (typeof id !== 'string' || id.length === 0) return null;
+	if (typeof name !== 'string' || name.length === 0) return null;
+	if (!isTodoView(view)) return null;
+	if (typeof section !== 'string') return null;
+	if (!isTaskSearchFilter(filter)) return null;
+	if (value.sort !== undefined && !isSortOption(value.sort)) return null;
 
-	return true;
+	return {
+		id,
+		name,
+		starred: typeof value.starred === 'boolean' ? value.starred : false,
+		view,
+		section,
+		filter,
+		...(value.sort !== undefined ? { sort: value.sort } : {}),
+	};
 };
 
 const parseSavedViews = (value: unknown): SavedFilterView[] => {
@@ -135,8 +144,9 @@ const parseSavedViews = (value: unknown): SavedFilterView[] => {
 
 	const migrated: SavedFilterView[] = [];
 	for (const entry of value) {
-		if (isSavedFilterView(entry)) {
-			migrated.push(entry);
+		const savedView = parseSavedFilterView(entry);
+		if (savedView) {
+			migrated.push(savedView);
 			continue;
 		}
 		// 兼容旧结构：含 tagFilter/showCompleted 但无 filter 的条目
@@ -270,12 +280,13 @@ class SettingsService {
 		return [...this.getSettings().savedViews];
 	}
 
-	saveView(name: string, snapshot: Omit<SavedFilterView, 'id' | 'name'>): SavedFilterView {
+	saveView(name: string, snapshot: Omit<SavedFilterView, 'id' | 'name' | 'starred'>): SavedFilterView {
 		const current = this.getSettings();
 		const view: SavedFilterView = {
 			...snapshot,
 			id: generateSavedViewId(),
 			name: name.trim(),
+			starred: false,
 		};
 
 		const nextSettings: AppSettings = {
@@ -285,6 +296,22 @@ class SettingsService {
 
 		this.saveSettings(nextSettings);
 		return view;
+	}
+
+	toggleViewStar(id: string): SavedFilterView | null {
+		const current = this.getSettings();
+		const targetIndex = current.savedViews.findIndex((view) => view.id === id);
+		if (targetIndex === -1) {
+			return null;
+		}
+
+		const toggled = {
+			...current.savedViews[targetIndex]!,
+			starred: !current.savedViews[targetIndex]!.starred,
+		};
+		const savedViews = current.savedViews.map((view, index) => index === targetIndex ? toggled : view);
+		this.saveSettings({ ...current, savedViews });
+		return toggled;
 	}
 
 	deleteView(id: string): boolean {
