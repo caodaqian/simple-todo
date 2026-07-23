@@ -29,6 +29,7 @@ const {
   getReviewHandler,
   suggestOrganizationHandler,
 } = require('./toolHandlers')
+const { fetchPageTitle } = require('./linkTitle')
 
 // ── 原生 db 文档适配 ──────────────────────────────────────────────────
 // 任务与模板一实体一文档，避免 dbStorage 单个数组文档的大小和同步冲突问题。
@@ -158,6 +159,10 @@ function withNotify(handler, notifyChanged) {
 
 // ── window.services (file/node capabilities) ─────────────────────────
 window.services = {
+
+  // 获取安全外部网页的 <title>，失败时返回空字符串
+  fetchPageTitle,
+
   // 读文件
   readFile(file) {
     return fs.readFileSync(file, { encoding: 'utf-8' })

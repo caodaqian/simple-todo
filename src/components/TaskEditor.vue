@@ -3,6 +3,7 @@
 import { useCompletionBlockedModal } from '../composables/useCompletionBlockedModal';
 import { useImeGuard } from '../composables/useImeGuard';
 import { getNextTaskStatus } from '../composables/useTaskQuickActions';
+import { buildMarkdownLink, isSingleHttpUrl } from '../services/linkPasteService';
 import { renderMarkdown } from '../services/markdownService';
 import { taskService, type AddSubtaskOverrides } from '../services/taskService';
 import { templateService } from '../services/templateService';
@@ -146,6 +147,113 @@ import TaskQuickActions from './TaskQuickActions.vue';
   let descBlurTimer: ReturnType<typeof setTimeout> | null = null;
   const DESC_RENDER_DEBOUNCE_MS = 300;
   const DESC_BLUR_DELAY_MS = 220;
+
+  interface PendingLinkPaste {
+    url: string;
+    start: number;
+    end: number;
+  }
+
+  const linkMenuVisible = ref(false);
+  const linkMenuEditing = ref(false);
+  const linkTitleLoading = ref(false);
+  const linkLabelDraft = ref('');
+  const pendingLinkPaste = ref<PendingLinkPaste | null>(null);
+  const linkMenuRef = ref<HTMLElement | null>(null);
+  let linkTitleRequestId = 0;
+
+  const closeLinkMenu = (): void => {
+    linkMenuVisible.value = false;
+    linkMenuEditing.value = false;
+    linkTitleLoading.value = false;
+    pendingLinkPaste.value = null;
+    linkTitleRequestId += 1;
+    document.removeEventListener('pointerdown', handleLinkMenuOutsidePointer);
+    document.removeEventListener('keydown', handleLinkMenuKeydown);
+  };
+
+  const handleLinkMenuOutsidePointer = (event: PointerEvent): void => {
+    const target = event.target;
+    if (target instanceof Node && linkMenuRef.value?.contains(target)) return;
+    closeLinkMenu();
+  };
+
+  const handleLinkMenuKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    closeLinkMenu();
+    void nextTick(() => descTextareaRef.value?.focus());
+  };
+
+  const replacePendingLink = (replacement: string): boolean => {
+    const pending = pendingLinkPaste.value;
+    const current = form.value.description;
+    if (!pending || current.slice(pending.start, pending.end) !== pending.url) {
+      closeLinkMenu();
+      return false;
+    }
+    form.value.description = current.slice(0, pending.start) + replacement + current.slice(pending.end);
+    closeLinkMenu();
+    void nextTick(() => {
+      const textarea = descTextareaRef.value;
+      if (!textarea) return;
+      const cursor = pending.start + replacement.length;
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+    });
+    return true;
+  };
+
+  const insertPendingLinkDirectly = (): void => {
+    const url = pendingLinkPaste.value?.url;
+    if (url) replacePendingLink(buildMarkdownLink(url, url));
+  };
+
+  const beginEditPendingLink = (): void => {
+    linkMenuEditing.value = true;
+    void nextTick(() => linkMenuRef.value?.querySelector<HTMLInputElement>('input')?.focus());
+  };
+
+  const confirmEditedPendingLink = (): void => {
+    const pending = pendingLinkPaste.value;
+    const label = linkLabelDraft.value.trim() || pending?.url;
+    if (pending && label) replacePendingLink(buildMarkdownLink(label, pending.url));
+  };
+
+  const openLinkMenu = (url: string, start: number, end: number): void => {
+    pendingLinkPaste.value = { url, start, end };
+    linkMenuVisible.value = true;
+    linkMenuEditing.value = false;
+    linkTitleLoading.value = true;
+    linkLabelDraft.value = url;
+    document.addEventListener('pointerdown', handleLinkMenuOutsidePointer);
+    document.addEventListener('keydown', handleLinkMenuKeydown);
+    const requestId = ++linkTitleRequestId;
+    void window.services.fetchPageTitle(url).then((title) => {
+      if (requestId !== linkTitleRequestId || !linkMenuVisible.value) return;
+      if (linkLabelDraft.value === url) linkLabelDraft.value = title || url;
+    }).catch(() => {
+      if (requestId === linkTitleRequestId && linkMenuVisible.value && linkLabelDraft.value.trim() === '') linkLabelDraft.value = url;
+    }).finally(() => {
+      if (requestId === linkTitleRequestId) linkTitleLoading.value = false;
+    });
+  };
+
+  const handleDescriptionPaste = (event: ClipboardEvent): void => {
+    const text = event.clipboardData?.getData('text/plain') ?? '';
+    const url = isSingleHttpUrl(text);
+    const textarea = event.currentTarget as HTMLTextAreaElement;
+    if (!url || textarea.selectionStart === null || textarea.selectionEnd === null) return;
+    event.preventDefault();
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    form.value.description = form.value.description.slice(0, start) + url + form.value.description.slice(end);
+    openLinkMenu(url, start, start + url.length);
+    void nextTick(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + url.length, start + url.length);
+    });
+  };
 
   const computeDescHtml = (): string => {
     if (!form.value.description.trim()) return '';
@@ -1042,6 +1150,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
 
   onBeforeUnmount(() => {
     removeTemplateMenuListeners();
+    closeLinkMenu();
     if (autoSaveTimer) {
       clearTimeout(autoSaveTimer);
       autoSaveTimer = null;
@@ -1234,8 +1343,26 @@ import TaskQuickActions from './TaskQuickActions.vue';
                 <label class="sr-only" for="task-description-input">任务描述</label>
                 <textarea v-if="descEditing" id="task-description-input" ref="descTextareaRef"
                   v-model="form.description" rows="10" placeholder="支持 Markdown 文本输入，停止输入或失焦后自动预览" class="desc-textarea"
-                  @focus="enterDescEditing" @blur="scheduleLeaveDescEditing" />
-                <div v-else class="desc-preview" :class="{ 'is-empty': !descPreviewHtml }" @click="enterDescEditing">
+                  @focus="enterDescEditing" @blur="scheduleLeaveDescEditing" @paste="handleDescriptionPaste" />
+                <div v-if="linkMenuVisible" ref="linkMenuRef" class="link-paste-menu" role="dialog" aria-label="插入 Markdown 链接">
+                  <div class="link-paste-menu__heading">检测到链接</div>
+                  <div class="link-paste-menu__url" :title="pendingLinkPaste?.url">{{ pendingLinkPaste?.url }}</div>
+                  <p v-if="linkTitleLoading" class="link-paste-menu__status">正在获取网页标题…</p>
+                  <template v-if="linkMenuEditing">
+                    <label class="sr-only" for="link-label-input">链接文本</label>
+                    <input id="link-label-input" v-model="linkLabelDraft" type="text" class="link-paste-menu__input" placeholder="链接文本" @keydown.enter.prevent="confirmEditedPendingLink" />
+                    <div class="link-paste-menu__actions">
+                      <button type="button" class="btn btn-primary" @click="confirmEditedPendingLink">插入</button>
+                      <button type="button" class="btn btn-ghost" @click="closeLinkMenu">取消</button>
+                    </div>
+                  </template>
+                  <div v-else class="link-paste-menu__actions">
+                    <button type="button" class="btn btn-primary" @click="insertPendingLinkDirectly">直接插入</button>
+                    <button type="button" class="btn btn-ghost" @click="beginEditPendingLink">编辑链接文本</button>
+                    <button type="button" class="btn btn-ghost" @click="closeLinkMenu">取消</button>
+                  </div>
+                </div>
+                <div v-if="!descEditing" class="desc-preview" :class="{ 'is-empty': !descPreviewHtml }" @click="enterDescEditing">
                   <div v-if="descPreviewHtml" v-html="descPreviewHtml"></div>
                   <p v-else class="desc-empty">点击此处添加描述（支持 Markdown）</p>
                 </div>
@@ -1886,6 +2013,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
   /* 描述：单区域切换式实时预览（编辑/预览共用同一区域） */
   .desc-shell {
     display: block;
+    position: relative;
   }
 
   .desc-textarea,
@@ -1906,6 +2034,26 @@ import TaskQuickActions from './TaskQuickActions.vue';
     line-height: 1.5;
     width: 100%;
   }
+
+  .link-paste-menu {
+    position: absolute;
+    z-index: var(--z-popover);
+    top: var(--space-3);
+    right: var(--space-3);
+    width: min(360px, calc(100% - var(--space-6)));
+    padding: var(--space-3);
+    border: 1px solid var(--color-border-strong, var(--color-border-subtle));
+    border-radius: var(--radius-md);
+    background: var(--color-bg-elevated, var(--color-bg));
+    box-shadow: var(--shadow-md);
+  }
+
+  .link-paste-menu__heading { font-weight: 600; font-size: var(--text-sm); }
+  .link-paste-menu__url,
+  .link-paste-menu__status { margin-top: var(--space-1); color: var(--color-text-muted); font-size: var(--text-xs); }
+  .link-paste-menu__url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .link-paste-menu__input { width: 100%; margin-top: var(--space-2); }
+  .link-paste-menu__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
 
   .desc-preview {
     cursor: text;

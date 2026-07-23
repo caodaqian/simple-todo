@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface WindowServices {
+	fetchPageTitle(url: string): Promise<string>;
 	readFile(file: string): string;
 	writeTextFile(text: string): string;
 	writeImageFile(base64Url: string): string | undefined;

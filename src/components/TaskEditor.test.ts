@@ -33,6 +33,10 @@ beforeEach(() => {
 			},
 		},
 	});
+	window.services = {
+		...window.services,
+		fetchPageTitle: vi.fn(async () => 'Example Site'),
+	} as unknown as typeof window.services;
 });
 
 afterEach(() => {
@@ -155,5 +159,45 @@ describe('TaskEditor compact layout', () => {
 		await nextTick();
 
 		expect(editor.querySelector('[data-testid="template-menu"]')).toBeNull();
+	});
+
+	it('offers a smart menu for a pasted URL and inserts the fetched page title', async () => {
+		const editor = await mountEditor();
+		editor.querySelector<HTMLElement>('.desc-preview')?.click();
+		await nextTick();
+		const textarea = editor.querySelector<HTMLTextAreaElement>('#task-description-input');
+		expect(textarea).not.toBeNull();
+		textarea!.focus();
+		textarea!.setSelectionRange(0, 0);
+		const clipboard = { getData: () => 'https://example.com/docs' } as unknown as DataTransfer;
+		const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+		Object.defineProperty(pasteEvent, 'clipboardData', { value: clipboard });
+		textarea!.dispatchEvent(pasteEvent);
+		await nextTick();
+		await Promise.resolve();
+
+		expect(editor.querySelector('.link-paste-menu')).not.toBeNull();
+		editor.querySelector<HTMLButtonElement>('.link-paste-menu .btn-ghost')?.click();
+		await nextTick();
+		editor.querySelector<HTMLInputElement>('#link-label-input')!.value = '文档';
+		editor.querySelector<HTMLInputElement>('#link-label-input')?.dispatchEvent(new Event('input', { bubbles: true }));
+		editor.querySelector<HTMLButtonElement>('.link-paste-menu .btn-primary')?.click();
+		await nextTick();
+
+		expect(textarea!.value).toBe('[文档](https://example.com/docs)');
+	});
+
+	it('does not intercept pasted ordinary text', async () => {
+		const editor = await mountEditor();
+		editor.querySelector<HTMLElement>('.desc-preview')?.click();
+		await nextTick();
+		const textarea = editor.querySelector<HTMLTextAreaElement>('#task-description-input')!;
+		const clipboard = { getData: () => '普通文本 https://example.com' } as unknown as DataTransfer;
+		const event = new Event('paste', { bubbles: true, cancelable: true });
+		Object.defineProperty(event, 'clipboardData', { value: clipboard });
+		textarea.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(false);
+		expect(editor.querySelector('.link-paste-menu')).toBeNull();
 	});
 });
