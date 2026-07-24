@@ -11,7 +11,7 @@ import {
     timestampToDateInput,
     toggleArrayValue,
 } from '../services/filterUtils';
-import type { TagMatchMode, TaskPriority, TaskSearchFilter, TaskStatus } from '../types/task';
+	import type { TagMatchMode, TaskDateRulePreset, TaskPriority, TaskSearchFilter, TaskStatus } from '../types/task';
 import AppIcon from './AppIcon.vue';
 
 	const props = defineProps<{
@@ -116,9 +116,67 @@ import AppIcon from './AppIcon.vue';
 	});
 
 	const clearDateRange = (): void => {
-		if (props.modelValue.dateRange === undefined) return;
-		emit('update:modelValue', mergePatch(props.modelValue, { dateRange: undefined }));
+		if (props.modelValue.dateRange === undefined && props.modelValue.dateRule === undefined) return;
+		emit('update:modelValue', mergePatch(props.modelValue, { dateRange: undefined, dateRule: undefined }));
 	};
+
+	const dateMode = computed<'relative' | 'fixed'>({
+		get: () => props.modelValue.dateRule !== undefined ? 'relative' : 'fixed',
+		set: (mode) => {
+			if (mode === 'relative') {
+				emit('update:modelValue', mergePatch(props.modelValue, {
+					dateRange: undefined,
+					dateRule: { preset: 'today' },
+				}));
+			} else {
+				emit('update:modelValue', mergePatch(props.modelValue, { dateRule: undefined }));
+			}
+		},
+	});
+
+	const datePresetOptions: Array<{ label: string; value: TaskDateRulePreset }> = [
+		{ label: '不限日期', value: 'none' },
+		{ label: '昨天', value: 'yesterday' },
+		{ label: '今天', value: 'today' },
+		{ label: '明天', value: 'tomorrow' },
+		{ label: '本周', value: 'thisWeek' },
+		{ label: '下周', value: 'nextWeek' },
+		{ label: '最近 7 天（含今天）', value: 'recent7Days' },
+		{ label: '未来 7 天（含今天）', value: 'next7Days' },
+		{ label: '最近 30 天（含今天）', value: 'recent30Days' },
+		{ label: '未来 30 天（含今天）', value: 'next30Days' },
+		{ label: '自定义偏移', value: 'custom' },
+	];
+
+	const datePreset = computed<TaskDateRulePreset>({
+		get: () => props.modelValue.dateRule?.preset ?? 'today',
+		set: (preset) => {
+			const dateRule = preset === 'custom'
+				? { preset: 'custom' as const, startOffset: 0, endOffset: 6 }
+				: { preset };
+			emit('update:modelValue', mergePatch(props.modelValue, { dateRule }));
+		},
+	});
+
+	const customStartOffset = computed<number>({
+		get: () => props.modelValue.dateRule?.preset === 'custom' ? props.modelValue.dateRule.startOffset : 0,
+		set: (value) => {
+			const endOffset = props.modelValue.dateRule?.preset === 'custom' ? props.modelValue.dateRule.endOffset : 6;
+			emit('update:modelValue', mergePatch(props.modelValue, {
+				dateRule: { preset: 'custom', startOffset: Math.min(value, endOffset), endOffset: Math.max(value, endOffset) },
+			}));
+		},
+	});
+
+	const customEndOffset = computed<number>({
+		get: () => props.modelValue.dateRule?.preset === 'custom' ? props.modelValue.dateRule.endOffset : 6,
+		set: (value) => {
+			const startOffset = props.modelValue.dateRule?.preset === 'custom' ? props.modelValue.dateRule.startOffset : 0;
+			emit('update:modelValue', mergePatch(props.modelValue, {
+				dateRule: { preset: 'custom', startOffset: Math.min(startOffset, value), endOffset: Math.max(startOffset, value) },
+			}));
+		},
+	});
 
 	const showCompleted = computed<boolean>({
 		get: () => props.modelValue.showCompleted === true,
@@ -188,10 +246,31 @@ import AppIcon from './AppIcon.vue';
 		<div class="filter-row">
 			<span class="filter-row__label">截止日期</span>
 			<div class="filter-row__control date-range">
-				<input v-model="dateStartIso" type="date" class="filter-input date-input" />
-				<span class="date-range__sep">—</span>
-				<input v-model="dateEndIso" type="date" class="filter-input date-input" />
-				<button v-if="modelValue.dateRange" type="button" class="filter-clear-btn inline"
+				<select v-model="dateMode" class="filter-input date-mode-select">
+					<option value="relative">相对日期</option>
+					<option value="fixed">固定日期</option>
+				</select>
+				<select v-if="dateMode === 'relative'" v-model="datePreset"
+					class="filter-input date-preset-select">
+					<option v-for="option in datePresetOptions" :key="option.value"
+						:value="option.value">{{ option.label }}</option>
+				</select>
+				<div v-if="dateMode === 'relative' && datePreset === 'custom'"
+					class="date-custom-range">
+					<input v-model.number="customStartOffset" type="number"
+						class="filter-input date-offset-input" aria-label="起始偏移天数" />
+					<span>至</span>
+					<input v-model.number="customEndOffset" type="number"
+						class="filter-input date-offset-input" aria-label="结束偏移天数" />
+					<span>天</span>
+				</div>
+				<div v-if="dateMode === 'fixed'" class="date-fixed-range">
+					<input v-model="dateStartIso" type="date" class="filter-input date-input" />
+					<span class="date-range__sep">—</span>
+					<input v-model="dateEndIso" type="date" class="filter-input date-input" />
+				</div>
+				<button v-if="modelValue.dateRange || modelValue.dateRule" type="button"
+					class="filter-clear-btn inline"
 					title="清除日期范围" @click="clearDateRange">
 					<AppIcon name="x" :size="12" />
 				</button>
@@ -278,6 +357,12 @@ import AppIcon from './AppIcon.vue';
 		align-items: stretch;
 	}
 
+	.date-range {
+		align-items: stretch;
+		flex-direction: column;
+		gap: var(--space-2);
+	}
+
 	.filter-row--actions {
 		flex-direction: row;
 		justify-content: flex-end;
@@ -305,8 +390,34 @@ import AppIcon from './AppIcon.vue';
 	}
 
 	.date-input {
+		flex: 1 1 0;
+		width: 0;
+		min-width: 0;
+	}
+
+	.date-mode-select,
+	.date-preset-select {
+		width: 100%;
 		flex: 0 0 auto;
-		width: auto;
+	}
+
+	.date-custom-range,
+	.date-fixed-range {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		width: 100%;
+	}
+
+	.date-offset-input {
+		width: 0;
+		flex: 1 1 0;
+		min-width: 0;
+	}
+
+	.date-range>.filter-clear-btn {
+		align-self: flex-end;
+		margin: calc(var(--space-1) * -1) 0 0;
 	}
 
 	.date-range__sep {

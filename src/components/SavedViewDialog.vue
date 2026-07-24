@@ -38,6 +38,11 @@ const cloneFilter = (filter: TaskSearchFilter): TaskSearchFilter => ({
 	...(Array.isArray(filter.status) ? { status: [...filter.status] } : {}),
 	...(Array.isArray(filter.priority) ? { priority: [...filter.priority] } : {}),
 	...(filter.dateRange === undefined ? {} : { dateRange: { ...filter.dateRange } }),
+	...(filter.dateRule === undefined ? {} : {
+		dateRule: filter.dateRule.preset === 'custom'
+			? { ...filter.dateRule }
+			: { ...filter.dateRule },
+	}),
 });
 
 const resetDraft = async (): Promise<void> => {

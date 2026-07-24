@@ -11,6 +11,7 @@ import TemplateLibraryPanel from '../../components/TemplateLibraryPanel.vue';
 import { catchUpReminders, useReminderScheduler } from '../../composables/useReminderScheduler';
 import { useUtoolsTaskSearch } from '../../composables/useUtoolsTaskSearch';
 import {
+    getTaskDateRuleSummary,
     hasActiveSidebarFilters,
     isSidebarFilterActive,
     mergePatch,
@@ -135,7 +136,9 @@ import ListView from '../ListView/index.vue';
       const statuses = Array.isArray(filter.status) ? filter.status : [filter.status];
       chips.push({ id: 'status', label: `状态：${statuses.map((item) => statusLabels[item]).join('、')}`, remove: () => { activeFilter.value = mergePatch(activeFilter.value, { status: undefined }); } });
     }
-    if (filter.dateRange) {
+    if (filter.dateRule) {
+      chips.push({ id: 'dateRule', label: `截止：${getTaskDateRuleSummary(filter.dateRule)}`, remove: () => { activeFilter.value = mergePatch(activeFilter.value, { dateRule: undefined }); } });
+    } else if (filter.dateRange) {
       const { start, end } = filter.dateRange;
       const label = start !== undefined && end !== undefined
         ? `截止：${formatDate(start)} - ${formatDate(end)}`

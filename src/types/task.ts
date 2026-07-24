@@ -71,6 +71,11 @@ export interface TaskTemplateChild {
 	description: string;
 }
 
+export type TaskTemplateDateRule =
+	| { type: 'none' }
+	| { type: 'relative'; offsetDays: number }
+	| { type: 'fixed'; date: number };
+
 export interface TaskTemplate {
 	id: string;
 	name: string;
@@ -85,6 +90,7 @@ export interface TaskTemplate {
 	subtasks: Subtask[];
 	/** 模板套用时创建的完整子任务定义。 */
 	childTasks: TaskTemplateChild[];
+	dateRule?: TaskTemplateDateRule;
 	reminderOffset?: number;
 	repeat?: RepeatRule;
 	createdAt: number;
@@ -139,6 +145,23 @@ export interface TaskDateRange {
 	end?: number;
 }
 
+export type TaskDateRulePreset =
+	| 'none'
+	| 'today'
+	| 'yesterday'
+	| 'tomorrow'
+	| 'thisWeek'
+	| 'nextWeek'
+	| 'recent7Days'
+	| 'next7Days'
+	| 'recent30Days'
+	| 'next30Days'
+	| 'custom';
+
+export type TaskDateRule =
+	| { preset: Exclude<TaskDateRulePreset, 'custom'> }
+	| { preset: 'custom'; startOffset: number; endOffset: number };
+
 export type TagMatchMode = 'any' | 'all';
 
 export interface TaskSearchFilter {
@@ -149,6 +172,7 @@ export interface TaskSearchFilter {
 	tagMatchMode?: TagMatchMode;
 	group?: string;
 	dateRange?: TaskDateRange;
+	dateRule?: TaskDateRule;
 	/** 仅显示结束/截止时间严格早于当前时刻的未完成任务。 */
 	overdueOnly?: boolean;
 	status?: TaskStatus | TaskStatus[];

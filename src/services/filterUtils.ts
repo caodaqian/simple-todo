@@ -1,6 +1,8 @@
 import type {
 	TagMatchMode,
 	TaskDateRange,
+	TaskDateRule,
+	TaskDateRulePreset,
 	TaskDateRules,
 	TaskPriority,
 	TaskSearchFilter,
@@ -14,6 +16,19 @@ import type { SideSection } from '../types/uiState';
 export const PRIORITY_OPTIONS: ReadonlyArray<TaskPriority> = ['low', 'medium', 'high', 'urgent'];
 export const STATUS_OPTIONS: ReadonlyArray<TaskStatus> = ['todo', 'doing', 'done'];
 export const TAG_MATCH_MODE_OPTIONS: ReadonlyArray<TagMatchMode> = ['any', 'all'];
+export const TASK_DATE_RULE_PRESETS: ReadonlyArray<TaskDateRulePreset> = [
+	'none',
+	'today',
+	'yesterday',
+	'tomorrow',
+	'thisWeek',
+	'nextWeek',
+	'recent7Days',
+	'next7Days',
+	'recent30Days',
+	'next30Days',
+	'custom',
+];
 
 /** 默认排序：与 TodoHub 初始 activeSort 一致。 */
 export const DEFAULT_TASK_SORT_OPTION: TaskSortOption = { field: 'updatedAt', order: 'desc' };
@@ -30,6 +45,24 @@ export const isTodoPriority = (value: unknown): value is TaskPriority =>
 
 export const isTagMatchMode = (value: unknown): value is TagMatchMode =>
 	value === 'any' || value === 'all';
+
+export const isTaskDateRulePreset = (value: unknown): value is TaskDateRulePreset =>
+	TASK_DATE_RULE_PRESETS.includes(value as TaskDateRulePreset);
+
+export const isTaskDateRule = (value: unknown): value is TaskDateRule => {
+	if (!isObjectRecord(value) || !isTaskDateRulePreset(value.preset)) return false;
+	if (value.preset !== 'custom') return Object.keys(value).every((key) => key === 'preset');
+	return Number.isInteger(value.startOffset)
+		&& Number.isInteger(value.endOffset)
+		&& (value.startOffset as number) <= (value.endOffset as number);
+};
+
+export const parseTaskDateRule = (value: unknown): TaskDateRule | undefined => {
+	if (!isTaskDateRule(value)) return undefined;
+	return value.preset === 'custom'
+		? { preset: 'custom', startOffset: value.startOffset, endOffset: value.endOffset }
+		: { preset: value.preset };
+};
 
 export const isTodoSortField = (value: unknown): value is TaskSortField =>
 	value === 'priority' || value === 'dueDate' || value === 'createdAt' || value === 'updatedAt';
@@ -57,6 +90,7 @@ export const isTaskSearchFilter = (value: unknown): value is TaskSearchFilter =>
 		if (!isObjectRecord(dr)) return false;
 		if (!isNumberOrUndefined(dr.start) || !isNumberOrUndefined(dr.end)) return false;
 	}
+	if (value.dateRule !== undefined && !isTaskDateRule(value.dateRule)) return false;
 	if (value.overdueOnly !== undefined && typeof value.overdueOnly !== 'boolean') return false;
 
 	if (value.status !== undefined) {
@@ -186,6 +220,12 @@ const getDateRangeForSection = (section: SideSection, rules: TaskDateRules): Tas
 	return undefined;
 };
 
+const getDateRuleForSection = (section: SideSection): TaskSearchFilter['dateRule'] => {
+	if (section === 'today') return { preset: 'today' };
+	if (section === 'week') return { preset: 'thisWeek' };
+	return undefined;
+};
+
 /** 当前筛选是否已激活指定侧栏分面。 */
 export const isSidebarFilterActive = (
 	filter: TaskSearchFilter,
@@ -193,7 +233,11 @@ export const isSidebarFilterActive = (
 	rules: TaskDateRules,
 ): boolean => {
 	const dateRange = getDateRangeForSection(section, rules);
-	if (dateRange) return sameDateRange(filter.dateRange, dateRange) && filter.overdueOnly !== true;
+	const dateRule = getDateRuleForSection(section);
+	if (dateRange) {
+		return (filter.dateRule?.preset === dateRule?.preset || sameDateRange(filter.dateRange, dateRange))
+			&& filter.overdueOnly !== true;
+	}
 	if (section === 'overdue') return filter.overdueOnly === true;
 	if (section === 'done') return hasDoneStatus(filter.status) && filter.showCompleted === true;
 	if (section === 'archived') return filter.archived === true;
@@ -221,6 +265,7 @@ export const toggleSidebarFilter = (
 	if (section === 'inbox') {
 		return mergePatch(filter, {
 			dateRange: undefined,
+			dateRule: undefined,
 			overdueOnly: undefined,
 			status: undefined,
 			showCompleted: undefined,
@@ -232,16 +277,17 @@ export const toggleSidebarFilter = (
 	}
 
 	const dateRange = getDateRangeForSection(section, rules);
+	const dateRule = getDateRuleForSection(section);
 	if (dateRange) {
 		return isSidebarFilterActive(filter, section, rules)
-			? mergePatch(filter, { dateRange: undefined, overdueOnly: undefined })
-			: mergePatch(filter, { dateRange, overdueOnly: undefined });
+			? mergePatch(filter, { dateRange: undefined, dateRule: undefined, overdueOnly: undefined })
+			: mergePatch(filter, { dateRange: undefined, dateRule, overdueOnly: undefined });
 	}
 
 	if (section === 'overdue') {
 		return filter.overdueOnly === true
 			? mergePatch(filter, { overdueOnly: undefined })
-			: mergePatch(filter, { dateRange: undefined, overdueOnly: true });
+			: mergePatch(filter, { dateRange: undefined, dateRule: undefined, overdueOnly: true });
 	}
 
 	if (section === 'done') {
@@ -305,4 +351,54 @@ export const buildDateRange = (start?: number, end?: number): TaskDateRange | un
 	if (start !== undefined) range.start = start;
 	if (end !== undefined) range.end = end;
 	return range;
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const localDayRange = (now: number, startOffset: number, endOffset: number): TaskDateRange => {
+	const today = new Date(now);
+	today.setHours(0, 0, 0, 0);
+	const start = new Date(today);
+	start.setDate(start.getDate() + startOffset);
+	const end = new Date(today);
+	end.setDate(end.getDate() + endOffset);
+	end.setHours(23, 59, 59, 999);
+	return { start: start.getTime(), end: end.getTime() };
+};
+
+export const resolveTaskDateRule = (rule: TaskDateRule, now = Date.now()): TaskDateRange | undefined => {
+	if (rule.preset === 'none') return undefined;
+	if (rule.preset === 'custom') return localDayRange(now, rule.startOffset, rule.endOffset);
+	if (rule.preset === 'today') return localDayRange(now, 0, 0);
+	if (rule.preset === 'yesterday') return localDayRange(now, -1, -1);
+	if (rule.preset === 'tomorrow') return localDayRange(now, 1, 1);
+	if (rule.preset === 'recent7Days') return localDayRange(now, -6, 0);
+	if (rule.preset === 'next7Days') return localDayRange(now, 0, 6);
+	if (rule.preset === 'recent30Days') return localDayRange(now, -29, 0);
+	if (rule.preset === 'next30Days') return localDayRange(now, 0, 29);
+
+	const today = new Date(now);
+	const mondayOffset = (today.getDay() + 6) % 7;
+	const weekStartOffset = rule.preset === 'thisWeek' ? -mondayOffset : 7 - mondayOffset;
+	return localDayRange(now, weekStartOffset, weekStartOffset + 6);
+};
+
+export const getTaskDateRuleSummary = (rule: TaskDateRule): string => {
+	if (rule.preset === 'none') return '无日期';
+	const summaries: Partial<Record<Exclude<TaskDateRulePreset, 'custom'>, string>> = {
+		today: '今天',
+		yesterday: '昨天',
+		tomorrow: '明天',
+		thisWeek: '本周',
+		nextWeek: '下周',
+		recent7Days: '最近 7 天',
+		next7Days: '未来 7 天',
+		recent30Days: '最近 30 天',
+		next30Days: '未来 30 天',
+	};
+	if (rule.preset === 'custom') {
+		const formatOffset = (offset: number): string => offset > 0 ? `+${offset}` : `${offset}`;
+		return `自定义：${formatOffset(rule.startOffset)} 至 ${formatOffset(rule.endOffset)} 天`;
+	}
+	return summaries[rule.preset] ?? rule.preset;
 };

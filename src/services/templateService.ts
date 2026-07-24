@@ -4,6 +4,7 @@ import type {
 	Task,
 	TaskTemplate,
 	TaskTemplateChild,
+	TaskTemplateDateRule,
 } from '../types/task';
 import { createDocumentStore, type DocumentRecord, type DocumentStore } from './documentStore';
 import { STORAGE_KEYS } from './storageKeys';
@@ -26,6 +27,13 @@ const isObjectRecord = (value: unknown): value is Record<string, unknown> => {
 
 const isTimestamp = (value: unknown): value is number => {
 	return typeof value === 'number' && Number.isFinite(value);
+};
+
+const isTemplateDateRule = (value: unknown): value is TaskTemplateDateRule => {
+	if (!isObjectRecord(value) || typeof value.type !== 'string') return false;
+	if (value.type === 'none') return Object.keys(value).length === 1;
+	if (value.type === 'relative') return Number.isInteger(value.offsetDays);
+	return value.type === 'fixed' && isTimestamp(value.date);
 };
 
 const cloneSubtasks = (subtasks: Subtask[] = []): Subtask[] =>
@@ -58,11 +66,21 @@ const generateTemplateId = (): string => {
 	return `tpl-${timestamp}-${random}`;
 };
 
+const resolveTemplateDate = (rule: TaskTemplateDateRule | undefined, now = Date.now()): { dueStart: number; dueEnd: number; allDay: true } | undefined => {
+	if (rule === undefined || rule.type === 'none') return undefined;
+	const date = new Date(rule.type === 'fixed' ? rule.date : now);
+	date.setHours(0, 0, 0, 0);
+	if (rule.type === 'relative') date.setDate(date.getDate() + rule.offsetDays);
+	const dueStart = date.getTime();
+	date.setHours(23, 59, 59, 999);
+	return { dueStart, dueEnd: date.getTime(), allDay: true };
+};
+
 const toTemplate = (value: unknown): TaskTemplate | null => {
 	if (!isObjectRecord(value)) return null;
 	const {
 		id, name, title, priority, tags, group, description, subtasks, children, childTasks,
-		reminderOffset, createdAt, updatedAt,
+		reminderOffset, repeat, dateRule, createdAt, updatedAt,
 	} = value;
 	if (typeof id !== 'string' || id.length === 0) return null;
 	if (typeof name !== 'string') return null;
@@ -73,6 +91,7 @@ const toTemplate = (value: unknown): TaskTemplate | null => {
 	if (typeof description !== 'string') return null;
 	if (!Array.isArray(subtasks) && !Array.isArray(children) && !Array.isArray(childTasks)) return null;
 	if (!isTimestamp(createdAt) || !isTimestamp(updatedAt)) return null;
+	if (dateRule !== undefined && !isTemplateDateRule(dateRule)) return null;
 	if (reminderOffset !== undefined && (typeof reminderOffset !== 'number' || !Number.isFinite(reminderOffset) || reminderOffset < 0)) {
 		return null;
 	}
@@ -121,6 +140,7 @@ const toTemplate = (value: unknown): TaskTemplate | null => {
 		childTasks: normalizedChildTasks,
 		children: normalizedChildTasks.map((child) => child.title),
 		createdAt, updatedAt,
+		...(dateRule === undefined ? {} : { dateRule }),
 		...(reminderOffset !== undefined ? { reminderOffset } : {}),
 	};
 };
@@ -137,6 +157,7 @@ export interface CreateTemplateInput {
 	childTasks?: TaskTemplateChild[];
 	reminderOffset?: number | null;
 	repeat?: TaskTemplate['repeat'];
+	dateRule?: TaskTemplateDateRule;
 }
 
 export interface ApplyTemplateOverrides {
@@ -184,6 +205,7 @@ class TemplateService {
 			subtasks: cloneSubtasks(template.subtasks),
 			childTasks: cloneChildTasks(template.childTasks),
 			...(template.children === undefined ? {} : { children: [...template.children] }),
+			...(template.dateRule === undefined ? {} : { dateRule: { ...template.dateRule } }),
 		};
 	}
 
@@ -277,6 +299,7 @@ class TemplateService {
 				: input.children ? [...input.children] : (input.subtasks ?? []).map((subtask) => subtask.title),
 			createdAt: now,
 			updatedAt: now,
+			...(input.dateRule === undefined ? {} : { dateRule: { ...input.dateRule } }),
 			...(typeof input.reminderOffset === 'number' ? { reminderOffset: input.reminderOffset } : {}),
 		};
 		const documentStore = this.getDocumentStore();
@@ -319,6 +342,9 @@ class TemplateService {
 				? patch.childTasks.map((child) => child.title)
 				: patch.children !== undefined ? [...patch.children] : [...(current.children ?? current.childTasks.map((child) => child.title))],
 			updatedAt: now,
+			...(patch.dateRule === undefined
+				? (current.dateRule === undefined ? {} : { dateRule: { ...current.dateRule } })
+				: { dateRule: { ...patch.dateRule } }),
 			...(patch.reminderOffset === undefined
 				? (currentReminderOffset === undefined ? {} : { reminderOffset: currentReminderOffset })
 				: (patch.reminderOffset === null ? {} : { reminderOffset: patch.reminderOffset })),
@@ -392,7 +418,7 @@ class TemplateService {
 		};
 	}
 
-	createFromTask(name: string, task: Task, children: Task[]): TaskTemplate {
+	createFromTask(name: string, task: Task, children: Task[], dateRule?: TaskTemplateDateRule): TaskTemplate {
 		return this.create({
 			name,
 			title: task.title,
@@ -408,6 +434,8 @@ class TemplateService {
 				description: child.description,
 			})),
 			...(task.reminderOffset === undefined ? {} : { reminderOffset: task.reminderOffset }),
+			...(task.repeat === undefined ? {} : { repeat: { ...task.repeat } }),
+			...(dateRule === undefined ? {} : { dateRule }),
 		});
 	}
 
@@ -426,6 +454,14 @@ class TemplateService {
 			subtasks: [],
 			...(overrides.dueDate !== undefined ? { dueDate: overrides.dueDate } : {}),
 		};
+		if (overrides.dueDate === undefined) {
+			const resolvedDate = resolveTemplateDate(this.getById(templateId)?.dateRule);
+			if (resolvedDate) {
+				input.dueStart = resolvedDate.dueStart;
+				input.dueEnd = resolvedDate.dueEnd;
+				input.allDay = true;
+			}
+		}
 		const task = taskService.create(input);
 		for (const child of draft.children) {
 			taskService.create({

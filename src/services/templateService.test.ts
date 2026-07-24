@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskTemplate } from '../types/task';
 import { STORAGE_KEYS } from './storageKeys';
 import { taskService } from './taskService';
@@ -150,6 +150,20 @@ describe('templateService', () => {
 	});
 
 	describe('applyTemplate', () => {
+		it('resolves a relative template date from the application day as an all-day task', () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date(2026, 6, 15, 12, 0, 0, 0));
+			const tpl = templateService.create({
+				name: 'n', title: 't', priority: 'low', dateRule: { type: 'relative', offsetDays: 3 },
+			});
+
+			const task = templateService.applyTemplate(tpl.id);
+
+			expect(task.allDay).toBe(true);
+			expect(task.dueEnd).toBe(new Date(2026, 6, 18, 23, 59, 59, 999).getTime());
+			vi.useRealTimers();
+		});
+
 		it('creates a task from template defaults', () => {
 			const tpl = templateService.create({
 				name: 'n', title: '原标题', priority: 'high', tags: ['a'], group: 'g',

@@ -34,6 +34,7 @@ const cloneFilter = (filter: TaskSearchFilter): TaskSearchFilter => {
 	const cloned: TaskSearchFilter = { ...filter };
 	if (filter.tags !== undefined) cloned.tags = [...filter.tags];
 	if (filter.dateRange !== undefined) cloned.dateRange = { ...filter.dateRange };
+	if (filter.dateRule !== undefined) cloned.dateRule = { ...filter.dateRule };
 	if (Array.isArray(filter.status)) cloned.status = [...filter.status];
 	if (Array.isArray(filter.priority)) cloned.priority = [...filter.priority];
 	return cloned;

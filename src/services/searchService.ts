@@ -11,6 +11,7 @@ import type {
 	TaskStatus,
 } from '../types/task';
 import { getTaskDeadline, getTaskEnd, getTaskStart } from '../types/task';
+import { resolveTaskDateRule } from './filterUtils';
 
 const PRIORITY_RANK: Record<TaskPriority, number> = {
 	low: 1,
@@ -198,6 +199,9 @@ export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[
 	const statusSet = normalizeStatuses(status);
 	const prioritySet = normalizePriorities(priority);
 	const dateRules = getTaskDateRules();
+	const resolvedDateRange = filter.dateRule === undefined
+		? dateRange
+		: resolveTaskDateRule(filter.dateRule, dateRules.now);
 
 	// Default behavior hides archived tasks. Archived views opt in with archived=true.
 	const source = tasks.filter((task) => {
@@ -229,7 +233,7 @@ export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[
 			return false;
 		}
 
-		if (dateRange && !isInDateRange(task, dateRange)) {
+		if (resolvedDateRange && !isInDateRange(task, resolvedDateRange)) {
 			return false;
 		}
 

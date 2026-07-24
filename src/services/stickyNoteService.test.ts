@@ -53,6 +53,19 @@ describe('stickyNoteService', () => {
 		expect(restored.sort).toEqual({ field: 'priority', order: 'desc' });
 	});
 
+	it('深拷贝筛选日期规则，避免修改便签源时污染原筛选', () => {
+		const source = stickyNoteService.buildSourceFromCurrent({
+			title: '最近任务',
+			view: 'list',
+			section: 'inbox',
+			filter: { dateRule: { preset: 'custom', startOffset: -2, endOffset: 3 } },
+		});
+
+		expect(source.filter.dateRule).toEqual({ preset: 'custom', startOffset: -2, endOffset: 3 });
+		(source.filter.dateRule as { startOffset?: number }).startOffset = -5;
+		expect(source.filter.dateRule).toEqual({ preset: 'custom', startOffset: -5, endOffset: 3 });
+	});
+
 	it('copies a legacy source locally and does not overwrite the legacy key', () => {
 		const legacy: StickyNoteSource = {
 			sourceKind: 'current', title: '旧便签', view: 'list', section: 'inbox',

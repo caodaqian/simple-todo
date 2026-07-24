@@ -7,7 +7,7 @@ import { buildMarkdownLink, isSingleHttpUrl } from '../services/linkPasteService
 import { renderMarkdown } from '../services/markdownService';
 import { taskService, type AddSubtaskOverrides } from '../services/taskService';
 import { templateService } from '../services/templateService';
-import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate } from '../types/task';
+  import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate, TaskTemplateDateRule } from '../types/task';
 import { getTaskDeadline, getTaskStart, normalizeAllDayDateRange, normalizeDateRange } from '../types/task';
 import AppIcon from './AppIcon.vue';
 import PomodoroStartButton from './PomodoroStartButton.vue';
@@ -78,6 +78,8 @@ import TaskQuickActions from './TaskQuickActions.vue';
   const errorMessage = ref('');
   const templateSaveVisible = ref(false);
   const templateNameDraft = ref('');
+  const templateDateType = ref<TaskTemplateDateRule['type']>('none');
+  const templateDateOffset = ref(0);
   const templateMenuVisible = ref(false);
   const templateMenuRef = ref<HTMLElement | null>(null);
   const templateMenuTriggerRef = ref<HTMLButtonElement | null>(null);
@@ -338,6 +340,18 @@ import TaskQuickActions from './TaskQuickActions.vue';
     if (!currentTask.value || currentTask.value.parentTaskId) return;
     closeTemplateMenu();
     templateNameDraft.value = `${currentTask.value.title}模板`;
+    const deadline = getTaskDeadline(currentTask.value);
+    if (deadline === undefined) {
+      templateDateType.value = 'none';
+      templateDateOffset.value = 0;
+    } else {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const target = new Date(deadline);
+      target.setHours(0, 0, 0, 0);
+      templateDateType.value = 'relative';
+      templateDateOffset.value = Math.round((target.getTime() - today.getTime()) / 86400000);
+    }
     templateSaveVisible.value = true;
   };
 
@@ -345,7 +359,12 @@ import TaskQuickActions from './TaskQuickActions.vue';
     const task = currentTask.value;
     const name = templateNameDraft.value.trim();
     if (!task || task.parentTaskId || !name) return;
-    templateService.createFromTask(name, task, taskService.getChildTasks(task.id));
+    const dateRule: TaskTemplateDateRule = templateDateType.value === 'relative'
+      ? { type: 'relative', offsetDays: templateDateOffset.value }
+      : templateDateType.value === 'fixed'
+        ? { type: 'fixed', date: getTaskDeadline(task) ?? Date.now() }
+        : { type: 'none' };
+    templateService.createFromTask(name, task, taskService.getChildTasks(task.id), dateRule);
     templateSaveVisible.value = false;
     templates.value = templateService.list();
   };
@@ -1615,10 +1634,23 @@ import TaskQuickActions from './TaskQuickActions.vue';
         <div v-if="templateSaveVisible" class="template-save-mask" @click.self="templateSaveVisible = false">
           <form class="template-save-dialog" aria-label="保存任务模板" @submit.prevent="saveCurrentAsTemplate">
             <h3>保存为模板</h3>
-            <p>将当前任务内容及其直接子任务保存为可复用方案；日期和重复规则不会保存。</p>
+            <p>将当前任务内容及其直接子任务保存为可复用方案；模板日期会在套用时重新计算。</p>
             <label class="field-block">
               <span class="field-label">模板名称</span>
               <input v-model.trim="templateNameDraft" type="text" maxlength="80" required autofocus />
+            </label>
+            <label class="field-block">
+              <span class="field-label">模板日期</span>
+              <select v-model="templateDateType">
+                <option value="none">不设置日期</option>
+                <option value="relative">套用时偏移</option>
+                <option value="fixed">固定日期</option>
+              </select>
+            </label>
+            <label v-if="templateDateType === 'relative'" class="field-block">
+              <span class="field-label">套用时偏移天数</span>
+              <input v-model.number="templateDateOffset" type="number" />
+              <small>例如 +3 表示套用后第 3 天，0 表示套用当天</small>
             </label>
             <div class="template-save-actions">
               <button type="button" class="btn btn-ghost" @click="templateSaveVisible = false">取消</button>

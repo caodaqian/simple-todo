@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Task } from '../types/task';
 import {
 	getTaskDateRules,
@@ -146,6 +146,20 @@ describe('filter title keyword', () => {
 });
 
 describe('sort by deadline uses getTaskDeadline', () => {
+	it('resolves a relative date rule at filtering time', () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(2026, 6, 15, 12, 0, 0, 0));
+		const todayTask = createTask({ id: 'today', dueEnd: new Date(2026, 6, 15, 18, 0, 0, 0).getTime() });
+		const tomorrowTask = createTask({ id: 'tomorrow', dueEnd: new Date(2026, 6, 16, 18, 0, 0, 0).getTime() });
+
+		const result = searchAndSortTasks([todayTask, tomorrowTask], {
+			dateRule: { preset: 'today' },
+		});
+
+		expect(result.map((task) => task.id)).toEqual(['today']);
+		vi.useRealTimers();
+	});
+
 	it('orders by dueEnd when dueStart missing', () => {
 		const a = createTask({ id: 'a', dueEnd: 500 });
 		const b = createTask({ id: 'b', dueEnd: 100 });
