@@ -7,10 +7,46 @@ describe('MCP tool registration', () => {
 		window.utools = {
 			...(window.utools ?? {}),
 			dbStorage: { getItem: vi.fn(), setItem: vi.fn() },
+			dbCryptoStorage: { getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn() },
 			getPath: vi.fn(() => '/tmp'),
 			showNotification: vi.fn(),
 			registerTool: vi.fn(),
 		} as typeof window.utools;
+	});
+
+	it('exposes only the narrow webhook credential API to the renderer', async () => {
+		await import('./services.js');
+
+		expect(Object.keys(window.services.webhooks).sort()).toEqual(['clearCredentials', 'getStatuses', 'saveCredentials']);
+		expect(window.services.webhooks).not.toHaveProperty('read');
+	});
+
+	it('routes webhook credential status and writes only through dbCryptoStorage', async () => {
+		const encryptedValues = new Map<string, unknown>();
+		window.utools!.dbCryptoStorage = {
+			getItem: vi.fn((key: string) => encryptedValues.get(key) ?? null),
+			setItem: vi.fn((key: string, value: unknown) => encryptedValues.set(key, value)),
+			removeItem: vi.fn((key: string) => encryptedValues.delete(key)),
+		};
+		await import('./services.js');
+		vi.mocked(window.utools!.dbStorage!.getItem).mockClear();
+		vi.mocked(window.utools!.dbStorage!.setItem).mockClear();
+
+		const saved = await window.services.webhooks.saveCredentials('feishu', {
+			url: 'https://open.feishu.cn/open-apis/bot/v2/hook/sensitive-token-4321',
+			secret: 'sensitive-secret',
+		});
+		const statuses = await window.services.webhooks.getStatuses();
+
+		expect(saved).toEqual({ platform: 'feishu', configured: true, endpointLabel: 'feishu · …4321' });
+		expect(statuses).toEqual([
+			{ platform: 'feishu', configured: true, endpointLabel: 'feishu · …4321' },
+			{ platform: 'dingtalk', configured: false },
+		]);
+		expect(window.utools!.dbCryptoStorage!.setItem).toHaveBeenCalledTimes(1);
+		expect(window.utools!.dbCryptoStorage!.getItem).toHaveBeenCalled();
+		expect(window.utools!.dbStorage!.getItem).not.toHaveBeenCalled();
+		expect(window.utools!.dbStorage!.setItem).not.toHaveBeenCalled();
 	});
 
 	it('registers exactly the tools declared in plugin.json', async () => {

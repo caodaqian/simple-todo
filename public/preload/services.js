@@ -30,6 +30,9 @@ const {
   suggestOrganizationHandler,
 } = require('./toolHandlers')
 const { fetchPageTitle } = require('./linkTitle')
+const { createWebhookCredentialStore } = require('./webhookCredentials')
+
+const webhookCredentialStore = createWebhookCredentialStore(window.utools && window.utools.dbCryptoStorage)
 
 // ── 原生 db 文档适配 ──────────────────────────────────────────────────
 // 任务与模板一实体一文档，避免 dbStorage 单个数组文档的大小和同步冲突问题。
@@ -159,6 +162,20 @@ function withNotify(handler, notifyChanged) {
 
 // ── window.services (file/node capabilities) ─────────────────────────
 window.services = {
+
+  webhooks: {
+    async getStatuses() {
+      return ['feishu', 'dingtalk'].map(function (platform) {
+        return webhookCredentialStore.getStatus(platform)
+      })
+    },
+    async saveCredentials(platform, input) {
+      return webhookCredentialStore.save(platform, input)
+    },
+    async clearCredentials(platform) {
+      webhookCredentialStore.clear(platform)
+    },
+  },
 
   // 获取安全外部网页的 <title>，失败时返回空字符串
   fetchPageTitle,

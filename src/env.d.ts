@@ -1,6 +1,19 @@
 /// <reference types="vite/client" />
 
+type WebhookPlatform = import('./types/webhook').WebhookPlatform;
+type WebhookTargetStatus = import('./types/webhook').WebhookTargetStatus;
+
+interface WebhookCredentialInput {
+	url: string;
+	secret?: string;
+}
+
 interface WindowServices {
+	webhooks: {
+		getStatuses(): Promise<WebhookTargetStatus[]>;
+		saveCredentials(platform: WebhookPlatform, input: WebhookCredentialInput): Promise<WebhookTargetStatus>;
+		clearCredentials(platform: WebhookPlatform): Promise<void>;
+	};
 	fetchPageTitle(url: string): Promise<string>;
 	readFile(file: string): string;
 	writeTextFile(text: string): string;
@@ -56,6 +69,11 @@ interface Window {
 		dbStorage?: {
 			getItem(key: string): unknown;
 			setItem(key: string, value: string): unknown;
+			removeItem(key: string): void;
+		};
+		dbCryptoStorage?: {
+			getItem(key: string): unknown;
+			setItem(key: string, value: unknown): void;
 			removeItem(key: string): void;
 		};
 		showNotification?(body: string, featureName?: string): void;
