@@ -56,6 +56,125 @@ describe('settingsService', () => {
 		expect(settings.savedViews).toEqual([]);
 	});
 
+	it('returns default non-sensitive webhook settings', () => {
+		const settings = settingsService.getSettings();
+		expect(settings.webhooks).toEqual(DEFAULT_SETTINGS.webhooks);
+		expect(settings.webhooks.feishu.enabled).toBe(false);
+		expect(settings.webhooks.dingtalk.enabled).toBe(false);
+		expect(settings.webhooks.dailyDigest).toEqual({
+			enabled: false,
+			time: '09:00',
+			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+		});
+	});
+
+	it('saves and retrieves valid webhook settings', () => {
+		settingsService.saveSettings({
+			...DEFAULT_SETTINGS,
+			webhooks: {
+				feishu: {
+					enabled: true,
+					events: ['task.due', 'task.completed'],
+					keyword: '简悦提醒',
+				},
+				dingtalk: {
+					enabled: true,
+					events: ['digest.daily'],
+				},
+				dailyDigest: {
+					enabled: true,
+					time: '18:30',
+					timezone: 'Asia/Shanghai',
+				},
+			},
+		});
+
+		expect(settingsService.getSettings().webhooks).toEqual({
+			feishu: {
+				enabled: true,
+				events: ['task.due', 'task.completed'],
+				keyword: '简悦提醒',
+			},
+			dingtalk: {
+				enabled: true,
+				events: ['digest.daily'],
+			},
+			dailyDigest: {
+				enabled: true,
+				time: '18:30',
+				timezone: 'Asia/Shanghai',
+			},
+		});
+	});
+
+	it('cleans invalid webhook events, time, timezone, and keywords', () => {
+		dbStorage.setItem('jianyue.settings', JSON.stringify({
+			...DEFAULT_SETTINGS,
+			webhooks: {
+				feishu: {
+					enabled: true,
+					events: ['task.due', 'invalid.event', 'task.due', 42],
+					keyword: '  简悦提醒  ',
+				},
+				dingtalk: {
+					enabled: 'yes',
+					events: 'task.completed',
+					keyword: 42,
+				},
+				dailyDigest: {
+					enabled: true,
+					time: '25:90',
+					timezone: 'Mars/Olympus_Mons',
+				},
+			},
+		}));
+
+		const settings = settingsService.getSettings();
+		expect(settings.webhooks.feishu).toEqual({
+			enabled: true,
+			events: ['task.due'],
+			keyword: '简悦提醒',
+		});
+		expect(settings.webhooks.dingtalk).toEqual(DEFAULT_SETTINGS.webhooks.dingtalk);
+		expect(settings.webhooks.dailyDigest).toEqual({
+			enabled: true,
+			time: DEFAULT_SETTINGS.webhooks.dailyDigest.time,
+			timezone: DEFAULT_SETTINGS.webhooks.dailyDigest.timezone,
+		});
+	});
+
+	it('migrates legacy settings to default webhook targets without changing notifications', () => {
+		dbStorage.setItem('jianyue.settings', JSON.stringify({
+			appearanceMode: 'dark',
+			notificationsEnabled: false,
+		}));
+
+		const settings = settingsService.getSettings();
+		expect(settings.notifyEnabled).toBe(false);
+		expect(settings.webhooks).toEqual(DEFAULT_SETTINGS.webhooks);
+	});
+
+	it('never persists webhook credentials in regular settings', () => {
+		settingsService.saveSettings({
+			...DEFAULT_SETTINGS,
+			webhooks: {
+				...DEFAULT_SETTINGS.webhooks,
+				feishu: {
+					...DEFAULT_SETTINGS.webhooks.feishu,
+					enabled: true,
+					url: 'https://open.feishu.cn/open-apis/bot/v2/hook/access-token',
+					token: 'access-token',
+					secret: 'signing-secret',
+				},
+			},
+		} as typeof DEFAULT_SETTINGS);
+
+		const persisted = dbStorage.getItem<string>('jianyue.settings');
+		expect(persisted).not.toContain('url');
+		expect(persisted).not.toContain('token');
+		expect(persisted).not.toContain('secret');
+	});
+
 	it('migrates legacy settings without savedViews to empty array', () => {
 		const legacy = {
 			appearanceMode: 'dark',

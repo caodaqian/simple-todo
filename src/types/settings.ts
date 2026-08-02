@@ -28,6 +28,7 @@ export const ACCENT_COLORS: readonly AccentColor[] = [
 ] as const;
 
 import type { TaskSearchFilter, TaskSortOption } from './task';
+import type { WebhookSettings } from './webhook';
 
 export interface SavedFilterView {
 	id: string;
@@ -61,9 +62,30 @@ export interface AppSettings {
 	notifyEnabled: boolean;
 	pomodoroMinutes: number;
 	savedViews: SavedFilterView[];
+	webhooks?: WebhookSettings;
 }
 
-export const DEFAULT_SETTINGS: AppSettings = {
+export type NormalizedAppSettings = Omit<AppSettings, 'webhooks'> & {
+	webhooks: WebhookSettings;
+};
+
+export const DEFAULT_WEBHOOK_SETTINGS: WebhookSettings = {
+	feishu: {
+		enabled: false,
+		events: ['task.due', 'task.completed', 'digest.daily'],
+	},
+	dingtalk: {
+		enabled: false,
+		events: ['task.due', 'task.completed', 'digest.daily'],
+	},
+	dailyDigest: {
+		enabled: false,
+		time: '09:00',
+		timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+	},
+};
+
+export const DEFAULT_SETTINGS: NormalizedAppSettings = {
 	appearanceMode: 'system',
 	accentColor: 'mauve',
 	fontScale: 'standard',
@@ -77,4 +99,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	notifyEnabled: true,
 	pomodoroMinutes: 40,
 	savedViews: [],
+	webhooks: DEFAULT_WEBHOOK_SETTINGS,
 };

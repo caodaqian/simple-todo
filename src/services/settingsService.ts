@@ -5,6 +5,7 @@ import type {
 	AppearanceMode,
 	FontScale,
 	MainWindowHeightPreset,
+	NormalizedAppSettings,
 	SavedFilterView,
 	StickyWindowHeightPreset,
 	StickyWindowPositionPreset,
@@ -12,8 +13,14 @@ import type {
 	StickyWindowWidthPreset,
 	TodoView,
 } from '../types/settings';
-import { ACCENT_COLORS, DEFAULT_SETTINGS } from '../types/settings';
+import { ACCENT_COLORS, DEFAULT_SETTINGS, DEFAULT_WEBHOOK_SETTINGS } from '../types/settings';
 import type { TaskSearchFilter } from '../types/task';
+import type {
+	DailyDigestSettings,
+	WebhookEventType,
+	WebhookSettings,
+	WebhookTargetSettings,
+} from '../types/webhook';
 import { isSortOption, isTaskSearchFilter } from './filterUtils';
 import { STORAGE_KEYS } from './storageKeys';
 
@@ -64,6 +71,109 @@ const isStickyWindowHeightPreset = (value: unknown): value is StickyWindowHeight
 
 const isStickyWindowPositionPreset = (value: unknown): value is StickyWindowPositionPreset => {
 	return value === 'auto' || value === 'top-left' || value === 'top-right' || value === 'center' || value === 'bottom-right';
+};
+
+const WEBHOOK_EVENT_TYPES: readonly WebhookEventType[] = [
+	'task.due',
+	'task.completed',
+	'digest.daily',
+];
+
+const isWebhookEventType = (value: unknown): value is WebhookEventType => {
+	return WEBHOOK_EVENT_TYPES.includes(value as WebhookEventType);
+};
+
+const cloneWebhookTargetSettings = (settings: WebhookTargetSettings): WebhookTargetSettings => ({
+	enabled: settings.enabled,
+	events: [...settings.events],
+	...(settings.keyword !== undefined ? { keyword: settings.keyword } : {}),
+});
+
+const cloneWebhookSettings = (settings: WebhookSettings): WebhookSettings => ({
+	feishu: cloneWebhookTargetSettings(settings.feishu),
+	dingtalk: cloneWebhookTargetSettings(settings.dingtalk),
+	dailyDigest: { ...settings.dailyDigest },
+});
+
+const createDefaultSettings = (): NormalizedAppSettings => ({
+	...DEFAULT_SETTINGS,
+	savedViews: [],
+	webhooks: cloneWebhookSettings(DEFAULT_WEBHOOK_SETTINGS),
+});
+
+const cloneSettings = (settings: NormalizedAppSettings): NormalizedAppSettings => ({
+	...settings,
+	savedViews: [...settings.savedViews],
+	webhooks: cloneWebhookSettings(settings.webhooks),
+});
+
+const parseWebhookEvents = (
+	value: unknown,
+	fallback: readonly WebhookEventType[],
+): WebhookEventType[] => {
+	if (!Array.isArray(value)) {
+		return [...fallback];
+	}
+
+	return [...new Set(value.filter(isWebhookEventType))];
+};
+
+const parseWebhookTargetSettings = (
+	value: unknown,
+	fallback: WebhookTargetSettings,
+): WebhookTargetSettings => {
+	if (!isObjectRecord(value)) {
+		return cloneWebhookTargetSettings(fallback);
+	}
+
+	const keyword = typeof value.keyword === 'string' ? value.keyword.trim() : '';
+	return {
+		enabled: typeof value.enabled === 'boolean' ? value.enabled : fallback.enabled,
+		events: parseWebhookEvents(value.events, fallback.events),
+		...(keyword.length > 0 ? { keyword } : {}),
+	};
+};
+
+const isDigestTime = (value: unknown): value is string => {
+	return typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+};
+
+const isIanaTimezone = (value: unknown): value is string => {
+	if (typeof value !== 'string' || value.length === 0) {
+		return false;
+	}
+
+	try {
+		new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+const parseDailyDigestSettings = (value: unknown): DailyDigestSettings => {
+	const fallback = DEFAULT_WEBHOOK_SETTINGS.dailyDigest;
+	if (!isObjectRecord(value)) {
+		return { ...fallback };
+	}
+
+	return {
+		enabled: typeof value.enabled === 'boolean' ? value.enabled : fallback.enabled,
+		time: isDigestTime(value.time) ? value.time : fallback.time,
+		timezone: isIanaTimezone(value.timezone) ? value.timezone : fallback.timezone,
+	};
+};
+
+const parseWebhookSettings = (value: unknown): WebhookSettings => {
+	if (!isObjectRecord(value)) {
+		return cloneWebhookSettings(DEFAULT_WEBHOOK_SETTINGS);
+	}
+
+	return {
+		feishu: parseWebhookTargetSettings(value.feishu, DEFAULT_WEBHOOK_SETTINGS.feishu),
+		dingtalk: parseWebhookTargetSettings(value.dingtalk, DEFAULT_WEBHOOK_SETTINGS.dingtalk),
+		dailyDigest: parseDailyDigestSettings(value.dailyDigest),
+	};
 };
 
 const legacySizeToWidthPreset = (value: unknown): StickyWindowWidthPreset => {
@@ -164,21 +274,19 @@ const generateSavedViewId = (): string => {
 	return `view-${timestamp}-${random}`;
 };
 
-const parseSettings = (raw: string): AppSettings => {
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (!isObjectRecord(parsed)) {
-			return { ...DEFAULT_SETTINGS };
-		}
+const normalizeSettings = (parsed: unknown): NormalizedAppSettings => {
+	if (!isObjectRecord(parsed)) {
+		return createDefaultSettings();
+	}
 
-		const notifyEnabled =
-			typeof parsed.notifyEnabled === 'boolean'
-				? parsed.notifyEnabled
-				: typeof parsed.notificationsEnabled === 'boolean'
-					? parsed.notificationsEnabled
-					: DEFAULT_SETTINGS.notifyEnabled;
+	const notifyEnabled =
+		typeof parsed.notifyEnabled === 'boolean'
+			? parsed.notifyEnabled
+			: typeof parsed.notificationsEnabled === 'boolean'
+				? parsed.notificationsEnabled
+				: DEFAULT_SETTINGS.notifyEnabled;
 
-		return {
+	return {
 			appearanceMode: isAppearanceMode(parsed.appearanceMode)
 				? parsed.appearanceMode
 				: DEFAULT_SETTINGS.appearanceMode,
@@ -214,18 +322,24 @@ const parseSettings = (raw: string): AppSettings => {
 			notifyEnabled,
 			pomodoroMinutes: normalizePomodoroMinutes(parsed.pomodoroMinutes),
 			savedViews: parseSavedViews(parsed.savedViews),
-		};
+			webhooks: parseWebhookSettings(parsed.webhooks),
+	};
+};
+
+const parseSettings = (raw: string): NormalizedAppSettings => {
+	try {
+		return normalizeSettings(JSON.parse(raw) as unknown);
 	} catch {
-		return { ...DEFAULT_SETTINGS };
+		return createDefaultSettings();
 	}
 };
 
 class SettingsService {
 	private readonly storageKey = STORAGE_KEYS.SETTINGS;
 
-	private memorySettings: AppSettings = { ...DEFAULT_SETTINGS };
+	private memorySettings: NormalizedAppSettings = createDefaultSettings();
 
-	private readonly settingsRef: Ref<AppSettings> = ref<AppSettings>({ ...DEFAULT_SETTINGS });
+	private readonly settingsRef: Ref<NormalizedAppSettings> = ref<NormalizedAppSettings>(createDefaultSettings());
 
 	constructor() {
 		// Hydrate ref from persisted storage at construction time.
@@ -233,26 +347,26 @@ class SettingsService {
 		this.settingsRef.value = initial;
 	}
 
-	getSettingsRef(): Ref<AppSettings> {
+	getSettingsRef(): Ref<NormalizedAppSettings> {
 		return this.settingsRef;
 	}
 
-	getSettings(): AppSettings {
+	getSettings(): NormalizedAppSettings {
 		const raw = this.readFromStorage();
 
 		if (raw === null) {
-			return { ...this.memorySettings };
+			return cloneSettings(this.memorySettings);
 		}
 
 		const settings = parseSettings(raw);
 		this.memorySettings = settings;
-		return { ...settings };
+		return cloneSettings(settings);
 	}
 
 	saveSettings(settings: AppSettings): void {
-		const nextSettings: AppSettings = { ...settings };
+		const nextSettings = normalizeSettings(settings);
 		this.memorySettings = nextSettings;
-		this.settingsRef.value = nextSettings;
+		this.settingsRef.value = cloneSettings(nextSettings);
 
 		const dbStorage = this.getDbStorage();
 		if (!dbStorage) {
@@ -266,14 +380,15 @@ class SettingsService {
 		}
 	}
 
-	updateSettings(patch: Partial<AppSettings>): AppSettings {
+	updateSettings(patch: Partial<AppSettings>): NormalizedAppSettings {
 		const nextSettings: AppSettings = {
 			...this.getSettings(),
 			...patch,
 		};
+		const normalized = normalizeSettings(nextSettings);
 
-		this.saveSettings(nextSettings);
-		return nextSettings;
+		this.saveSettings(normalized);
+		return normalized;
 	}
 
 	getViews(): SavedFilterView[] {
