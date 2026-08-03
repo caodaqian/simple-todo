@@ -8,12 +8,15 @@ import { STORAGE_KEYS } from './storageKeys';
 import type {
 	WebhookDeliveryRecord,
 	WebhookDomainEvent,
+	WebhookEventEnvelope,
 	WebhookErrorCode,
 	WebhookPlatform,
 } from '../types/webhook';
 
+type WebhookEventDocumentData = WebhookDomainEvent | WebhookEventEnvelope;
+
 interface WebhookOutboxDependencies {
-	eventStore?: DocumentStore<WebhookDomainEvent>;
+	eventStore?: DocumentStore<WebhookEventDocumentData>;
 	deliveryStore?: DocumentStore<WebhookDeliveryRecord>;
 	clock?: () => number;
 	idFactory?: () => string;
@@ -75,8 +78,31 @@ const withoutTransientFields = (delivery: WebhookDeliveryRecord): WebhookDeliver
 	return rest;
 };
 
+const normalizeJsonValue = (value: unknown): unknown => {
+	if (Array.isArray(value)) {
+		return value.map(normalizeJsonValue);
+	}
+	if (value !== null && typeof value === 'object') {
+		return Object.fromEntries(
+			Object.entries(value)
+				.sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+				.map(([key, child]) => [key, normalizeJsonValue(child)]),
+		);
+	}
+	return value;
+};
+
 const eventsMatch = (stored: WebhookDomainEvent, input: WebhookDomainEvent): boolean => {
-	return stored.type === input.type && JSON.stringify(stored.payload) === JSON.stringify(input.payload);
+	return stored.type === input.type
+		&& JSON.stringify(normalizeJsonValue(stored.payload)) === JSON.stringify(normalizeJsonValue(input.payload));
+};
+
+const isEventEnvelope = (data: WebhookEventDocumentData): data is WebhookEventEnvelope => {
+	return Object.hasOwn(data, 'event') && Object.hasOwn(data, 'targetPlatforms');
+};
+
+const readEventEnvelope = (data: WebhookEventDocumentData): WebhookEventEnvelope => {
+	return isEventEnvelope(data) ? data : { event: data, targetPlatforms: [] };
 };
 
 export interface WebhookOutboxService {
@@ -92,7 +118,7 @@ export interface WebhookOutboxService {
 }
 
 export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {}): WebhookOutboxService => {
-	const eventStore = deps.eventStore ?? createDocumentStore<WebhookDomainEvent>();
+	const eventStore = deps.eventStore ?? createDocumentStore<WebhookEventDocumentData>();
 	const deliveryStore = deps.deliveryStore ?? createDocumentStore<WebhookDeliveryRecord>();
 	const clock = deps.clock ?? Date.now;
 	const idFactory = deps.idFactory ?? defaultIdFactory;
@@ -128,60 +154,75 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 	};
 
 	const requireMatchingEvent = (
-		document: DocumentRecord<WebhookDomainEvent> | null,
+		document: DocumentRecord<WebhookEventDocumentData> | null,
 		event: WebhookDomainEvent,
-	): DocumentRecord<WebhookDomainEvent> => {
-		if (document === null || !eventsMatch(document.data, event)) {
+	): DocumentRecord<WebhookEventDocumentData> => {
+		if (document === null || !eventsMatch(readEventEnvelope(document.data).event, event)) {
 			throw new Error(STORAGE_ERROR_MESSAGE);
 		}
 		return document;
 	};
 
-	const ensureEvent = (event: WebhookDomainEvent): DocumentRecord<WebhookDomainEvent> => {
+	const registerEventTargets = (
+		event: WebhookDomainEvent,
+		platforms: WebhookPlatform[],
+	): DocumentRecord<WebhookEventDocumentData> => {
 		const documentId = eventDocumentId(event.id);
-		const existing = eventStore.get(documentId);
-		if (existing !== null) {
-			return requireMatchingEvent(existing, event);
-		}
-
-		const result = eventStore.write({ _id: documentId, data: event });
-		if (result.status !== 'ok' && result.status !== 'conflict') {
-			throw new Error(STORAGE_ERROR_MESSAGE);
-		}
-		return requireMatchingEvent(eventStore.get(documentId), event);
-	};
-
-	const touchEvent = (event: WebhookDomainEvent): void => {
-		let document = requireMatchingEvent(eventStore.get(eventDocumentId(event.id)), event);
+		let document = eventStore.get(documentId);
 		for (let attempt = 0; attempt < 3; attempt += 1) {
+			if (document === null) {
+				const envelope: WebhookEventEnvelope = { event, targetPlatforms: platforms };
+				const result = eventStore.write({ _id: documentId, data: envelope });
+				if (result.status === 'ok') {
+					return { _id: documentId, ...(result.rev === undefined ? {} : { _rev: result.rev }), data: envelope };
+				}
+				if (result.status !== 'conflict') {
+					throw new Error(STORAGE_ERROR_MESSAGE);
+				}
+				document = eventStore.get(documentId);
+				if (document === null) {
+					throw new Error(STORAGE_ERROR_MESSAGE);
+				}
+				continue;
+			}
+
+			document = requireMatchingEvent(document, event);
+			const currentEnvelope = readEventEnvelope(document.data);
+			const targetPlatforms = [...new Set([...currentEnvelope.targetPlatforms, ...platforms])];
+			if (isEventEnvelope(document.data) && targetPlatforms.length === currentEnvelope.targetPlatforms.length) {
+				return document;
+			}
 			const result = eventStore.write({
 				_id: document._id,
 				...(document._rev === undefined ? {} : { _rev: document._rev }),
-				data: document.data,
+				data: { event: currentEnvelope.event, targetPlatforms },
 			});
 			if (result.status === 'ok') {
-				return;
+				return requireMatchingEvent(eventStore.get(documentId), event);
 			}
 			if (result.status !== 'conflict') {
 				throw new Error(STORAGE_ERROR_MESSAGE);
 			}
-			document = requireMatchingEvent(eventStore.get(eventDocumentId(event.id)), event);
+			document = eventStore.get(documentId);
+			if (document === null) {
+				throw new Error(STORAGE_ERROR_MESSAGE);
+			}
 		}
 		throw new Error(STORAGE_ERROR_MESSAGE);
 	};
 
 	return {
 		enqueue: (event, platforms) => {
-			ensureEvent(event);
+			const uniquePlatforms = [...new Set(platforms)];
+			registerEventTargets(event, uniquePlatforms);
 
 			const now = clock();
-			return [...new Set(platforms)].map((platform) => {
+			return uniquePlatforms.map((platform) => {
 				const documentId = deliveryDocumentId(platform, event.id);
 				const existing = deliveryStore.get(documentId);
 				if (existing !== null) {
 					return existing.data;
 				}
-				touchEvent(event);
 				const delivery: WebhookDeliveryRecord = {
 					id: idFactory(),
 					eventId: event.id,
@@ -206,7 +247,10 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 				throw new Error(STORAGE_ERROR_MESSAGE);
 			});
 		},
-		getEvent: (eventId) => eventStore.get(eventDocumentId(eventId))?.data ?? null,
+		getEvent: (eventId) => {
+			const document = eventStore.get(eventDocumentId(eventId));
+			return document === null ? null : readEventEnvelope(document.data).event;
+		},
 		listDeliveries: () => listDeliveryDocuments().map((document) => document.data),
 		listReady: (now = clock()) => listDeliveryDocuments()
 			.map((document) => document.data)
@@ -300,13 +344,16 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 			const removableEventIds = new Set<string>();
 
 			for (const eventDocument of eventDocuments) {
-				const deliveries = deliveryDocuments.filter((document) => document.data.eventId === eventDocument.data.id);
-				if (deliveries.length === 0 || deliveries.every((document) => (
-					document.data.status === 'succeeded'
+				const envelope = readEventEnvelope(eventDocument.data);
+				const deliveries = deliveryDocuments.filter((document) => document.data.eventId === envelope.event.id);
+				const allTargetsSucceeded = envelope.targetPlatforms.every((platform) => deliveries.some((document) => (
+					document.data.platform === platform
+					&& document.data.status === 'succeeded'
 					&& document.data.succeededAt !== undefined
 					&& document.data.succeededAt < cutoff
-				))) {
-					removableEventIds.add(eventDocument.data.id);
+				)));
+				if (allTargetsSucceeded) {
+					removableEventIds.add(envelope.event.id);
 				}
 			}
 
@@ -328,7 +375,7 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 
 			let events = 0;
 			for (const document of eventDocuments) {
-				if (!removableEventIds.has(document.data.id)) {
+				if (!removableEventIds.has(readEventEnvelope(document.data).event.id)) {
 					continue;
 				}
 				assertWriteSucceeded(eventStore.remove({

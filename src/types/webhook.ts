@@ -66,6 +66,11 @@ export type WebhookDomainEvent =
 		payload: { digest: WebhookDigestSnapshot };
 	};
 
+export interface WebhookEventEnvelope {
+	event: WebhookDomainEvent;
+	targetPlatforms: WebhookPlatform[];
+}
+
 export type WebhookDeliveryStatus = 'pending' | 'sending' | 'succeeded' | 'blocked';
 
 export type WebhookErrorCode =

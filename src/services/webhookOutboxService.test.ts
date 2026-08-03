@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { DocumentRecord, DocumentReference, DocumentStore, DocumentWriteResult } from './documentStore';
 import { STORAGE_KEYS } from './storageKeys';
 import { createWebhookOutboxService } from './webhookOutboxService';
-import type { WebhookDeliveryRecord, WebhookDomainEvent } from '../types/webhook';
+import type { WebhookDeliveryRecord, WebhookDomainEvent, WebhookEventEnvelope } from '../types/webhook';
+
+type StoredWebhookEvent = WebhookDomainEvent | WebhookEventEnvelope;
 
 class TestDocumentStore<T> implements DocumentStore<T> {
 	private readonly documents = new Map<string, DocumentRecord<T>>();
@@ -11,6 +13,7 @@ class TestDocumentStore<T> implements DocumentStore<T> {
 	nextWriteResult: DocumentWriteResult | null = null;
 	nextRemoveResult: DocumentWriteResult | null = null;
 	beforeWrite: ((document: DocumentRecord<T>) => void) | null = null;
+	afterWrite: ((document: DocumentRecord<T>) => void) | null = null;
 	beforeRemove: ((document: DocumentReference) => void) | null = null;
 	writeCount = 0;
 
@@ -39,7 +42,9 @@ class TestDocumentStore<T> implements DocumentStore<T> {
 		}
 		this.revision += 1;
 		const rev = `rev-${this.revision}`;
-		this.documents.set(document._id, structuredClone({ ...document, _rev: rev }));
+		const stored = structuredClone({ ...document, _rev: rev });
+		this.documents.set(document._id, stored);
+		this.afterWrite?.(structuredClone(stored));
 		return { status: 'ok', rev };
 	}
 
@@ -86,8 +91,29 @@ const event = (
 	payload: { task: { ...taskSnapshot }, reminderAt: NOW },
 });
 
+const reorderedEvent = (
+	id = 'event-1',
+	occurredAt = NOW - MINUTE,
+): Extract<WebhookDomainEvent, { type: 'task.due' }> => ({
+	payload: {
+		reminderAt: NOW,
+		task: {
+		group: '项目 A',
+		tags: ['工作'],
+		priority: 'high',
+		description: '整理本周进度',
+		title: '发送周报',
+		dueAt: NOW + DAY,
+		id: 'task-1',
+	},
+	},
+	occurredAt,
+	type: 'task.due',
+	id,
+});
+
 const createHarness = (initialNow = NOW) => {
-	const eventStore = new TestDocumentStore<WebhookDomainEvent>();
+	const eventStore = new TestDocumentStore<StoredWebhookEvent>();
 	const deliveryStore = new TestDocumentStore<WebhookDeliveryRecord>();
 	let currentTime = initialNow;
 	let nextId = 0;
@@ -135,8 +161,28 @@ describe('webhookOutboxService', () => {
 			`${STORAGE_KEYS.WEBHOOK_DELIVERY_DOCUMENT_PREFIX}feishu_65_76_65_6e_74_2d_31`,
 			`${STORAGE_KEYS.WEBHOOK_DELIVERY_DOCUMENT_PREFIX}dingtalk_65_76_65_6e_74_2d_31`,
 		]);
-		expect(eventStore.get(`${STORAGE_KEYS.WEBHOOK_EVENT_DOCUMENT_PREFIX}event-1`)?.data).toEqual(domainEvent);
+		expect(eventStore.get(`${STORAGE_KEYS.WEBHOOK_EVENT_DOCUMENT_PREFIX}event-1`)?.data).toEqual({
+			event: domainEvent,
+			targetPlatforms: ['feishu', 'dingtalk'],
+		});
 		expect(service.getEvent('event-1')).toEqual(domainEvent);
+	});
+
+	it('reads legacy raw event documents and upgrades them before creating deliveries', () => {
+		const { service, eventStore } = createHarness();
+		const domainEvent = event('legacy-event');
+		eventStore.write({
+			_id: `${STORAGE_KEYS.WEBHOOK_EVENT_DOCUMENT_PREFIX}${domainEvent.id}`,
+			data: domainEvent,
+		});
+
+		service.enqueue(domainEvent, ['feishu']);
+
+		expect(service.getEvent(domainEvent.id)).toEqual(domainEvent);
+		expect(eventStore.get(`${STORAGE_KEYS.WEBHOOK_EVENT_DOCUMENT_PREFIX}${domainEvent.id}`)?.data).toEqual({
+			event: domainEvent,
+			targetPlatforms: ['feishu'],
+		});
 	});
 
 	it('returns existing deliveries without duplicate writes when enqueue is repeated', () => {
@@ -153,6 +199,19 @@ describe('webhookOutboxService', () => {
 		expect(service.listDeliveries()).toHaveLength(2);
 	});
 
+	it('treats payloads with different object key insertion order as equivalent on repeated enqueue', () => {
+		const { service, eventStore, deliveryStore } = createHarness();
+		const first = service.enqueue(event(), ['feishu']);
+		const eventWrites = eventStore.writeCount;
+		const deliveryWrites = deliveryStore.writeCount;
+
+		const second = service.enqueue(reorderedEvent(), ['feishu']);
+
+		expect(second).toEqual(first);
+		expect(eventStore.writeCount).toBe(eventWrites);
+		expect(deliveryStore.writeCount).toBe(deliveryWrites);
+	});
+
 	it('deduplicates repeated platform inputs', () => {
 		const { service } = createHarness();
 
@@ -167,7 +226,7 @@ describe('webhookOutboxService', () => {
 		let concurrent: WebhookDeliveryRecord[] = [];
 		eventStore.beforeWrite = () => {
 			eventStore.beforeWrite = null;
-			concurrent = service.enqueue(event(), ['feishu']);
+			concurrent = service.enqueue(reorderedEvent(), ['feishu']);
 		};
 
 		const deliveries = service.enqueue(event(), ['feishu']);
@@ -213,6 +272,18 @@ describe('webhookOutboxService', () => {
 		mismatched.payload.task.title = 'sensitive payload';
 
 		expect(() => service.enqueue(mismatched, ['dingtalk'])).toThrow('Webhook outbox storage operation failed.');
+		expect(service.listDeliveries()).toHaveLength(1);
+	});
+
+	it('preserves array order when comparing event payloads', () => {
+		const { service } = createHarness();
+		const stored = event('array-order');
+		stored.payload.task.tags = ['工作', '紧急'];
+		service.enqueue(stored, ['feishu']);
+		const reordered = event('array-order');
+		reordered.payload.task.tags = ['紧急', '工作'];
+
+		expect(() => service.enqueue(reordered, ['dingtalk'])).toThrow('Webhook outbox storage operation failed.');
 		expect(service.listDeliveries()).toHaveLength(1);
 	});
 
@@ -423,6 +494,29 @@ describe('webhookOutboxService', () => {
 		expect(service.getEvent('cleanup-after-conflict')).not.toBeNull();
 		expect(service.listDeliveries()).toEqual([
 			expect.objectContaining({ eventId: 'cleanup-race', platform: 'dingtalk', status: 'pending' }),
+		]);
+	});
+
+	it('keeps an event when cleanup runs after target registration but before delivery creation', () => {
+		const { service, eventStore } = createHarness();
+		const [delivery] = service.enqueue(event('reverse-cleanup-race'), ['feishu']);
+		if (delivery === undefined) throw new Error('Expected delivery.');
+		const claimed = service.claim(delivery.id, NOW);
+		if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
+		service.succeed(delivery.id, claimed.leaseToken, NOW + 1_000);
+		let cleanupResult: { events: number; deliveries: number } | null = null;
+		eventStore.afterWrite = () => {
+			eventStore.afterWrite = null;
+			cleanupResult = service.cleanup(NOW + 30 * DAY + 1_001);
+		};
+
+		const [laterDelivery] = service.enqueue(event('reverse-cleanup-race'), ['dingtalk']);
+
+		expect(cleanupResult).toEqual({ events: 0, deliveries: 1 });
+		expect(laterDelivery).toMatchObject({ platform: 'dingtalk', status: 'pending' });
+		expect(service.getEvent('reverse-cleanup-race')).toEqual(event('reverse-cleanup-race'));
+		expect(service.listDeliveries()).toEqual([
+			expect.objectContaining({ eventId: 'reverse-cleanup-race', platform: 'dingtalk', status: 'pending' }),
 		]);
 	});
 
