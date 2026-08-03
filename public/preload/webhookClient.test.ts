@@ -29,6 +29,7 @@ describe('webhookClient request builders', () => {
 		await expect(validateWebhookUrl('dingtalk', 'https://oapi.dingtalk.com/robot/send', { lookup: publicLookup })).rejects.toThrow();
 		await expect(validateWebhookUrl('dingtalk', 'https://oapi.dingtalk.com/robot/send?access_token=x&sign=y', { lookup: publicLookup })).rejects.toThrow();
 		await expect(validateWebhookUrl('dingtalk', 'https://user@oapi.dingtalk.com/robot/send?access_token=x', { lookup: publicLookup })).rejects.toThrow();
+		await expect(validateWebhookUrl('dingtalk', 'https://oapi.dingtalk.com:443/robot/send?access_token=x', { lookup: publicLookup })).rejects.toThrow();
 		await expect(validateWebhookUrl('dingtalk', 'https://oapi.dingtalk.com:8443/robot/send?access_token=x', { lookup: publicLookup })).rejects.toThrow();
 	});
 
@@ -42,6 +43,39 @@ describe('webhookClient request builders', () => {
 		})).rejects.toThrow();
 		await expect(validateWebhookUrl('dingtalk', 'https://oapi.dingtalk.com/robot/send?access_token=x', {
 			lookup: async () => { throw new Error('dns failed'); },
+		})).rejects.toThrow();
+	});
+
+	it.each([
+		'::ffff:127.0.0.1',
+		'::ffff:192.168.1.1',
+		'::ffff:7f00:1',
+	])('rejects IPv4-mapped IPv6 DNS results: %s', async (address) => {
+		await expect(validateWebhookUrl('feishu', 'https://open.feishu.cn/open-apis/bot/v2/hook/token', {
+			lookup: async () => [{ address, family: 6 }],
+		})).rejects.toThrow();
+	});
+
+	it.each([
+		'100.64.0.1',
+		'100.127.255.254',
+		'198.18.0.1',
+		'198.19.255.254',
+		'fec0::1',
+		'ff02::1',
+		'2001:db8::1',
+	])('rejects non-global DNS results: %s', async (address) => {
+		await expect(validateWebhookUrl('dingtalk', 'https://oapi.dingtalk.com/robot/send?access_token=x', {
+			lookup: async () => [{ address, family: address.includes(':') ? 6 : 4 }],
+		})).rejects.toThrow();
+	});
+
+	it('rejects mixed DNS results when any address is non-global', async () => {
+		await expect(validateWebhookUrl('feishu', 'https://open.feishu.cn/open-apis/bot/v2/hook/token', {
+			lookup: async () => [
+				{ address: '8.8.8.8', family: 4 },
+				{ address: '100.64.0.1', family: 4 },
+			],
 		})).rejects.toThrow();
 	});
 
@@ -108,11 +142,12 @@ describe('webhookClient request builders', () => {
 	});
 
 	it('normalizes and truncates message fields at platform-safe boundaries', () => {
-		const message = formatWebhookMessage({ title: `  ${'标'.repeat(100)}  `, text: `  ${'内'.repeat(4100)}  ` });
+		const message = formatWebhookMessage({ title: `  ${'标'.repeat(100)}  `, text: `  第一行\r\n第二行\r第三行\n${'内'.repeat(4100)}  ` });
 
 		expect(message.title).toHaveLength(80);
 		expect(message.text).toHaveLength(4000);
 		expect(message.title.startsWith('标')).toBe(true);
-		expect(message.text.startsWith('内')).toBe(true);
+		expect(message.text.startsWith('第一行\n第二行\n第三行\n')).toBe(true);
+		expect(message.text).not.toContain('\r');
 	});
 });
