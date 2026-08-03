@@ -82,6 +82,7 @@ export interface WebhookDeliveryRecord {
 	id: string;
 	eventId: string;
 	platform: WebhookPlatform;
+	dedupeKey: string;
 	status: WebhookDeliveryStatus;
 	attempts: number;
 	createdAt: number;
