@@ -17,6 +17,7 @@ interface WebhookOutboxDependencies {
 	deliveryStore?: DocumentStore<WebhookDeliveryRecord>;
 	clock?: () => number;
 	idFactory?: () => string;
+	leaseTokenFactory?: () => string;
 }
 
 const LEASE_DURATION = 60_000;
@@ -39,6 +40,17 @@ const defaultIdFactory = (): string => {
 	return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
+const defaultLeaseTokenFactory = (): string => {
+	if (typeof globalThis.crypto?.randomUUID === 'function') {
+		return globalThis.crypto.randomUUID();
+	}
+	if (typeof globalThis.crypto?.getRandomValues === 'function') {
+		const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+		return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+	}
+	throw new Error('Secure random generation is unavailable.');
+};
+
 const toStableDocumentSuffix = (platform: WebhookPlatform, eventId: string): string => {
 	const encodedEventId = [...eventId]
 		.map((character) => character.codePointAt(0)?.toString(16) ?? '')
@@ -59,8 +71,12 @@ const assertWriteSucceeded = (result: DocumentWriteResult): void => {
 };
 
 const withoutTransientFields = (delivery: WebhookDeliveryRecord): WebhookDeliveryRecord => {
-	const { nextAttemptAt: _, leaseExpiresAt: __, errorCode: ___, ...rest } = delivery;
+	const { nextAttemptAt: _, leaseExpiresAt: __, leaseToken: ___, errorCode: ____, ...rest } = delivery;
 	return rest;
+};
+
+const eventsMatch = (stored: WebhookDomainEvent, input: WebhookDomainEvent): boolean => {
+	return stored.type === input.type && JSON.stringify(stored.payload) === JSON.stringify(input.payload);
 };
 
 export interface WebhookOutboxService {
@@ -69,8 +85,8 @@ export interface WebhookOutboxService {
 	listDeliveries(): WebhookDeliveryRecord[];
 	listReady(now?: number): WebhookDeliveryRecord[];
 	claim(deliveryId: string, now?: number): WebhookDeliveryRecord | null;
-	succeed(deliveryId: string, now?: number): WebhookDeliveryRecord | null;
-	fail(deliveryId: string, errorCode: WebhookErrorCode, now?: number): WebhookDeliveryRecord | null;
+	succeed(deliveryId: string, leaseToken: string, now?: number): WebhookDeliveryRecord | null;
+	fail(deliveryId: string, leaseToken: string, errorCode: WebhookErrorCode, now?: number): WebhookDeliveryRecord | null;
 	retryBlocked(platform?: WebhookPlatform, now?: number): number;
 	cleanup(now?: number): { events: number; deliveries: number };
 }
@@ -80,6 +96,7 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 	const deliveryStore = deps.deliveryStore ?? createDocumentStore<WebhookDeliveryRecord>();
 	const clock = deps.clock ?? Date.now;
 	const idFactory = deps.idFactory ?? defaultIdFactory;
+	const leaseTokenFactory = deps.leaseTokenFactory ?? defaultLeaseTokenFactory;
 
 	const listDeliveryDocuments = (): DocumentRecord<WebhookDeliveryRecord>[] => {
 		return deliveryStore.list(STORAGE_KEYS.WEBHOOK_DELIVERY_DOCUMENT_PREFIX);
@@ -110,20 +127,61 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 			&& delivery.leaseExpiresAt <= now;
 	};
 
+	const requireMatchingEvent = (
+		document: DocumentRecord<WebhookDomainEvent> | null,
+		event: WebhookDomainEvent,
+	): DocumentRecord<WebhookDomainEvent> => {
+		if (document === null || !eventsMatch(document.data, event)) {
+			throw new Error(STORAGE_ERROR_MESSAGE);
+		}
+		return document;
+	};
+
+	const ensureEvent = (event: WebhookDomainEvent): DocumentRecord<WebhookDomainEvent> => {
+		const documentId = eventDocumentId(event.id);
+		const existing = eventStore.get(documentId);
+		if (existing !== null) {
+			return requireMatchingEvent(existing, event);
+		}
+
+		const result = eventStore.write({ _id: documentId, data: event });
+		if (result.status !== 'ok' && result.status !== 'conflict') {
+			throw new Error(STORAGE_ERROR_MESSAGE);
+		}
+		return requireMatchingEvent(eventStore.get(documentId), event);
+	};
+
+	const touchEvent = (event: WebhookDomainEvent): void => {
+		let document = requireMatchingEvent(eventStore.get(eventDocumentId(event.id)), event);
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			const result = eventStore.write({
+				_id: document._id,
+				...(document._rev === undefined ? {} : { _rev: document._rev }),
+				data: document.data,
+			});
+			if (result.status === 'ok') {
+				return;
+			}
+			if (result.status !== 'conflict') {
+				throw new Error(STORAGE_ERROR_MESSAGE);
+			}
+			document = requireMatchingEvent(eventStore.get(eventDocumentId(event.id)), event);
+		}
+		throw new Error(STORAGE_ERROR_MESSAGE);
+	};
+
 	return {
 		enqueue: (event, platforms) => {
-			const eventId = eventDocumentId(event.id);
-			if (eventStore.get(eventId) === null) {
-				assertWriteSucceeded(eventStore.write({ _id: eventId, data: event }));
-			}
+			ensureEvent(event);
 
 			const now = clock();
-			return platforms.map((platform) => {
+			return [...new Set(platforms)].map((platform) => {
 				const documentId = deliveryDocumentId(platform, event.id);
 				const existing = deliveryStore.get(documentId);
 				if (existing !== null) {
 					return existing.data;
 				}
+				touchEvent(event);
 				const delivery: WebhookDeliveryRecord = {
 					id: idFactory(),
 					eventId: event.id,
@@ -135,8 +193,17 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 					updatedAt: now,
 					nextAttemptAt: now,
 				};
-				assertWriteSucceeded(deliveryStore.write({ _id: documentId, data: delivery }));
-				return delivery;
+				const result = deliveryStore.write({ _id: documentId, data: delivery });
+				if (result.status === 'ok') {
+					return delivery;
+				}
+				if (result.status === 'conflict') {
+					const winner = deliveryStore.get(documentId);
+					if (winner !== null) {
+						return winner.data;
+					}
+				}
+				throw new Error(STORAGE_ERROR_MESSAGE);
 			});
 		},
 		getEvent: (eventId) => eventStore.get(eventDocumentId(eventId))?.data ?? null,
@@ -160,11 +227,16 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 				attempts: delivery.attempts + 1,
 				updatedAt: now,
 				leaseExpiresAt: now + LEASE_DURATION,
+				leaseToken: leaseTokenFactory(),
 			});
 		},
-		succeed: (deliveryId, now = clock()) => {
+		succeed: (deliveryId, leaseToken, now = clock()) => {
 			const document = findDeliveryDocument(deliveryId);
-			if (document === null) {
+			if (
+				document === null
+				|| document.data.status !== 'sending'
+				|| document.data.leaseToken !== leaseToken
+			) {
 				return null;
 			}
 			return writeDelivery(document, {
@@ -174,12 +246,16 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 				succeededAt: now,
 			});
 		},
-		fail: (deliveryId, errorCode, now = clock()) => {
+		fail: (deliveryId, leaseToken, errorCode, now = clock()) => {
 			const document = findDeliveryDocument(deliveryId);
-			if (document === null) {
+			if (
+				document === null
+				|| document.data.status !== 'sending'
+				|| document.data.leaseToken !== leaseToken
+			) {
 				return null;
 			}
-			const { leaseExpiresAt: _, nextAttemptAt: __, ...delivery } = document.data;
+			const { leaseExpiresAt: _, leaseToken: __, nextAttemptAt: ___, ...delivery } = document.data;
 			if (retryableErrorCodes.has(errorCode)) {
 				const delay = Math.min(
 					INITIAL_RETRY_DELAY * (2 ** Math.max(0, delivery.attempts - 1)),
@@ -206,7 +282,7 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 				if (document.data.status !== 'blocked' || (platform !== undefined && document.data.platform !== platform)) {
 					continue;
 				}
-				const { errorCode: _, leaseExpiresAt: __, ...delivery } = document.data;
+				const { errorCode: _, leaseExpiresAt: __, leaseToken: ___, ...delivery } = document.data;
 				writeDelivery(document, {
 					...delivery,
 					status: 'pending',

@@ -10,6 +10,8 @@ class TestDocumentStore<T> implements DocumentStore<T> {
 
 	nextWriteResult: DocumentWriteResult | null = null;
 	nextRemoveResult: DocumentWriteResult | null = null;
+	beforeWrite: ((document: DocumentRecord<T>) => void) | null = null;
+	beforeRemove: ((document: DocumentReference) => void) | null = null;
 	writeCount = 0;
 
 	get(id: string): DocumentRecord<T> | null {
@@ -25,6 +27,7 @@ class TestDocumentStore<T> implements DocumentStore<T> {
 
 	write(document: DocumentRecord<T>): DocumentWriteResult {
 		this.writeCount += 1;
+		this.beforeWrite?.(structuredClone(document));
 		if (this.nextWriteResult !== null) {
 			const result = this.nextWriteResult;
 			this.nextWriteResult = null;
@@ -41,6 +44,7 @@ class TestDocumentStore<T> implements DocumentStore<T> {
 	}
 
 	remove(document: DocumentReference): DocumentWriteResult {
+		this.beforeRemove?.(structuredClone(document));
 		if (this.nextRemoveResult !== null) {
 			const result = this.nextRemoveResult;
 			this.nextRemoveResult = null;
@@ -72,7 +76,10 @@ const taskSnapshot = {
 	dueAt: NOW + DAY,
 };
 
-const event = (id = 'event-1', occurredAt = NOW - MINUTE): WebhookDomainEvent => ({
+const event = (
+	id = 'event-1',
+	occurredAt = NOW - MINUTE,
+): Extract<WebhookDomainEvent, { type: 'task.due' }> => ({
 	id,
 	type: 'task.due',
 	occurredAt,
@@ -84,11 +91,13 @@ const createHarness = (initialNow = NOW) => {
 	const deliveryStore = new TestDocumentStore<WebhookDeliveryRecord>();
 	let currentTime = initialNow;
 	let nextId = 0;
+	let nextLeaseToken = 0;
 	const service = createWebhookOutboxService({
 		eventStore,
 		deliveryStore,
 		clock: () => currentTime,
 		idFactory: () => `delivery-${++nextId}`,
+		leaseTokenFactory: () => `lease-${++nextLeaseToken}`,
 	});
 	return {
 		service,
@@ -144,6 +153,69 @@ describe('webhookOutboxService', () => {
 		expect(service.listDeliveries()).toHaveLength(2);
 	});
 
+	it('deduplicates repeated platform inputs', () => {
+		const { service } = createHarness();
+
+		const deliveries = service.enqueue(event(), ['feishu', 'feishu', 'dingtalk', 'feishu']);
+
+		expect(deliveries.map((delivery) => delivery.platform)).toEqual(['feishu', 'dingtalk']);
+		expect(service.listDeliveries()).toHaveLength(2);
+	});
+
+	it('treats concurrent event creation as idempotent after re-reading the winner', () => {
+		const { service, eventStore } = createHarness();
+		let concurrent: WebhookDeliveryRecord[] = [];
+		eventStore.beforeWrite = () => {
+			eventStore.beforeWrite = null;
+			concurrent = service.enqueue(event(), ['feishu']);
+		};
+
+		const deliveries = service.enqueue(event(), ['feishu']);
+
+		expect(deliveries).toEqual(concurrent);
+		expect(service.listDeliveries()).toHaveLength(1);
+	});
+
+	it('treats concurrent delivery creation as idempotent after re-reading the winner', () => {
+		const { service, deliveryStore } = createHarness();
+		let concurrent: WebhookDeliveryRecord[] = [];
+		deliveryStore.beforeWrite = () => {
+			deliveryStore.beforeWrite = null;
+			concurrent = service.enqueue(event(), ['feishu']);
+		};
+
+		const deliveries = service.enqueue(event(), ['feishu']);
+
+		expect(deliveries).toEqual(concurrent);
+		expect(service.listDeliveries()).toHaveLength(1);
+	});
+
+	it('retries an event touch conflict when concurrent enqueue adds another platform', () => {
+		const { service, eventStore } = createHarness();
+		service.enqueue(event(), []);
+		let concurrent: WebhookDeliveryRecord[] = [];
+		eventStore.beforeWrite = () => {
+			eventStore.beforeWrite = null;
+			concurrent = service.enqueue(event(), ['dingtalk']);
+		};
+
+		const deliveries = service.enqueue(event(), ['feishu']);
+
+		expect(deliveries.map((delivery) => delivery.platform)).toEqual(['feishu']);
+		expect(concurrent.map((delivery) => delivery.platform)).toEqual(['dingtalk']);
+		expect(service.listDeliveries()).toHaveLength(2);
+	});
+
+	it('rejects an existing event with a different type or payload using a generic error', () => {
+		const { service } = createHarness();
+		service.enqueue(event(), ['feishu']);
+		const mismatched = event();
+		mismatched.payload.task.title = 'sensitive payload';
+
+		expect(() => service.enqueue(mismatched, ['dingtalk'])).toThrow('Webhook outbox storage operation failed.');
+		expect(service.listDeliveries()).toHaveLength(1);
+	});
+
 	it('lists ready deliveries in schedule order and skips future retries', () => {
 		const { service, setNow } = createHarness();
 		service.enqueue(event('later', NOW - 5 * MINUTE), ['feishu']);
@@ -153,8 +225,9 @@ describe('webhookOutboxService', () => {
 		service.enqueue(event('future', NOW - 20 * MINUTE), ['feishu']);
 		const future = service.listDeliveries().find((delivery) => delivery.eventId === 'future');
 		if (future === undefined) throw new Error('Expected future delivery.');
-		service.claim(future.id, NOW + 2 * MINUTE);
-		service.fail(future.id, 'network_error', NOW + 2 * MINUTE);
+		const claimed = service.claim(future.id, NOW + 2 * MINUTE);
+		if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
+		service.fail(future.id, claimed.leaseToken, 'network_error', NOW + 2 * MINUTE);
 
 		expect(service.listReady(NOW + 2 * MINUTE).map((delivery) => delivery.eventId)).toEqual(['later', 'first']);
 	});
@@ -166,7 +239,12 @@ describe('webhookOutboxService', () => {
 
 		const claimed = service.claim(delivery.id, NOW);
 
-		expect(claimed).toMatchObject({ status: 'sending', attempts: 1, leaseExpiresAt: NOW + MINUTE });
+		expect(claimed).toMatchObject({
+			status: 'sending',
+			attempts: 1,
+			leaseExpiresAt: NOW + MINUTE,
+			leaseToken: 'lease-1',
+		});
 		expect(claimed?.nextAttemptAt).toBeUndefined();
 		expect(service.claim(delivery.id, NOW + MINUTE - 1)).toBeNull();
 		expect(service.listReady(NOW + MINUTE).map((record) => record.id)).toEqual([delivery.id]);
@@ -174,21 +252,47 @@ describe('webhookOutboxService', () => {
 			status: 'sending',
 			attempts: 2,
 			leaseExpiresAt: NOW + 2 * MINUTE,
+			leaseToken: 'lease-2',
 		});
+	});
+
+	it('fences expired executors from failing or succeeding a newer lease', () => {
+		const { service, deliveryStore } = createHarness();
+		const [delivery] = service.enqueue(event(), ['feishu']);
+		if (delivery === undefined) throw new Error('Expected delivery.');
+		const firstClaim = service.claim(delivery.id, NOW);
+		const secondClaim = service.claim(delivery.id, NOW + MINUTE);
+		if (firstClaim?.leaseToken === undefined || secondClaim?.leaseToken === undefined) {
+			throw new Error('Expected lease tokens.');
+		}
+		const writesBeforeStaleCompletion = deliveryStore.writeCount;
+
+		expect(service.fail(delivery.id, firstClaim.leaseToken, 'timeout', NOW + MINUTE + 1)).toBeNull();
+		expect(service.succeed(delivery.id, firstClaim.leaseToken, NOW + MINUTE + 2)).toBeNull();
+		expect(deliveryStore.writeCount).toBe(writesBeforeStaleCompletion);
+		expect(service.listDeliveries()[0]).toEqual(secondClaim);
+		expect(service.succeed(delivery.id, secondClaim.leaseToken, NOW + MINUTE + 3)).toMatchObject({
+			status: 'succeeded',
+			succeededAt: NOW + MINUTE + 3,
+		});
+		expect(service.listDeliveries()[0]?.leaseToken).toBeUndefined();
+		expect(service.fail(delivery.id, secondClaim.leaseToken, 'timeout', NOW + MINUTE + 4)).toBeNull();
 	});
 
 	it('marks a claimed delivery succeeded and clears transient state', () => {
 		const { service } = createHarness();
 		const [delivery] = service.enqueue(event(), ['feishu']);
 		if (delivery === undefined) throw new Error('Expected delivery.');
-		service.claim(delivery.id, NOW);
+		const claimed = service.claim(delivery.id, NOW);
+		if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
 
-		const succeeded = service.succeed(delivery.id, NOW + 5_000);
+		const succeeded = service.succeed(delivery.id, claimed.leaseToken, NOW + 5_000);
 
 		expect(succeeded).toMatchObject({ status: 'succeeded', succeededAt: NOW + 5_000 });
 		expect(succeeded?.leaseExpiresAt).toBeUndefined();
 		expect(succeeded?.nextAttemptAt).toBeUndefined();
 		expect(succeeded?.errorCode).toBeUndefined();
+		expect(succeeded?.leaseToken).toBeUndefined();
 		expect(service.listReady(NOW + DAY)).toEqual([]);
 	});
 
@@ -196,9 +300,10 @@ describe('webhookOutboxService', () => {
 		const { service } = createHarness();
 		const [delivery] = service.enqueue(event(), ['feishu']);
 		if (delivery === undefined) throw new Error('Expected delivery.');
-		service.claim(delivery.id, NOW);
+		let claimed = service.claim(delivery.id, NOW);
+		if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
 
-		const firstFailure = service.fail(delivery.id, 'network_error', NOW + 1_000);
+		const firstFailure = service.fail(delivery.id, claimed.leaseToken, 'network_error', NOW + 1_000);
 		expect(firstFailure).toMatchObject({
 			status: 'pending',
 			attempts: 1,
@@ -207,15 +312,17 @@ describe('webhookOutboxService', () => {
 		});
 		expect(firstFailure?.leaseExpiresAt).toBeUndefined();
 
-		service.claim(delivery.id, NOW + 31_000);
-		const secondFailure = service.fail(delivery.id, 'timeout', NOW + 32_000);
+		claimed = service.claim(delivery.id, NOW + 31_000);
+		if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
+		const secondFailure = service.fail(delivery.id, claimed.leaseToken, 'timeout', NOW + 32_000);
 		expect(secondFailure).toMatchObject({ attempts: 2, nextAttemptAt: NOW + 92_000 });
 
 		let failed = secondFailure;
 		for (let attempt = 3; attempt <= 8; attempt += 1) {
 			if (failed?.nextAttemptAt === undefined) throw new Error('Expected retry schedule.');
-			service.claim(delivery.id, failed.nextAttemptAt);
-			failed = service.fail(delivery.id, 'server_error', failed.nextAttemptAt);
+			claimed = service.claim(delivery.id, failed.nextAttemptAt);
+			if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
+			failed = service.fail(delivery.id, claimed.leaseToken, 'server_error', failed.nextAttemptAt);
 		}
 		expect((failed?.nextAttemptAt ?? 0) - (failed?.updatedAt ?? 0)).toBe(30 * MINUTE);
 	});
@@ -224,8 +331,14 @@ describe('webhookOutboxService', () => {
 		const { service } = createHarness();
 		const deliveries = service.enqueue(event(), ['feishu', 'dingtalk']);
 		for (const delivery of deliveries) {
-			service.claim(delivery.id, NOW);
-			service.fail(delivery.id, delivery.platform === 'feishu' ? 'invalid_credentials' : 'unknown', NOW + 1_000);
+			const claimed = service.claim(delivery.id, NOW);
+			if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
+			service.fail(
+				delivery.id,
+				claimed.leaseToken,
+				delivery.platform === 'feishu' ? 'invalid_credentials' : 'unknown',
+				NOW + 1_000,
+			);
 		}
 
 		const blocked = service.listDeliveries();
@@ -246,8 +359,9 @@ describe('webhookOutboxService', () => {
 		const deliveries = service.enqueue(event(), ['feishu', 'dingtalk']);
 		const feishu = deliveries.find((delivery) => delivery.platform === 'feishu');
 		if (feishu === undefined) throw new Error('Expected Feishu delivery.');
-		service.claim(feishu.id, NOW);
-		service.succeed(feishu.id, NOW + 1_000);
+		const claimed = service.claim(feishu.id, NOW);
+		if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
+		service.succeed(feishu.id, claimed.leaseToken, NOW + 1_000);
 
 		expect(service.listDeliveries().find((delivery) => delivery.platform === 'feishu')?.status).toBe('succeeded');
 		expect(service.listDeliveries().find((delivery) => delivery.platform === 'dingtalk')).toMatchObject({
@@ -260,18 +374,21 @@ describe('webhookOutboxService', () => {
 		const { service } = createHarness();
 		const resolved = service.enqueue(event('resolved'), ['feishu', 'dingtalk']);
 		for (const delivery of resolved) {
-			service.claim(delivery.id, NOW);
-			service.succeed(delivery.id, NOW + 1_000);
+			const claimed = service.claim(delivery.id, NOW);
+			if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
+			service.succeed(delivery.id, claimed.leaseToken, NOW + 1_000);
 		}
 		const partial = service.enqueue(event('partial'), ['feishu', 'dingtalk']);
 		const partialSuccess = partial.find((delivery) => delivery.platform === 'feishu');
 		if (partialSuccess === undefined) throw new Error('Expected partial delivery.');
-		service.claim(partialSuccess.id, NOW);
-		service.succeed(partialSuccess.id, NOW + 1_000);
+		const partialClaim = service.claim(partialSuccess.id, NOW);
+		if (partialClaim?.leaseToken === undefined) throw new Error('Expected lease token.');
+		service.succeed(partialSuccess.id, partialClaim.leaseToken, NOW + 1_000);
 		const [blocked] = service.enqueue(event('blocked'), ['feishu']);
 		if (blocked === undefined) throw new Error('Expected blocked delivery.');
-		service.claim(blocked.id, NOW);
-		service.fail(blocked.id, 'invalid_request', NOW + 1_000);
+		const blockedClaim = service.claim(blocked.id, NOW);
+		if (blockedClaim?.leaseToken === undefined) throw new Error('Expected lease token.');
+		service.fail(blocked.id, blockedClaim.leaseToken, 'invalid_request', NOW + 1_000);
 
 		expect(service.cleanup(NOW + 30 * DAY)).toEqual({ events: 0, deliveries: 0 });
 		expect(service.cleanup(NOW + 30 * DAY + 1_001)).toEqual({ events: 1, deliveries: 3 });
@@ -284,11 +401,93 @@ describe('webhookOutboxService', () => {
 		]));
 	});
 
+	it('keeps the event and new platform delivery when cleanup races with enqueue', () => {
+		const { service, eventStore } = createHarness();
+		const [delivery] = service.enqueue(event('cleanup-race'), ['feishu']);
+		if (delivery === undefined) throw new Error('Expected delivery.');
+		const claimed = service.claim(delivery.id, NOW);
+		if (claimed?.leaseToken === undefined) throw new Error('Expected lease token.');
+		service.succeed(delivery.id, claimed.leaseToken, NOW + 1_000);
+		const [laterDelivery] = service.enqueue(event('cleanup-after-conflict'), ['feishu']);
+		if (laterDelivery === undefined) throw new Error('Expected later delivery.');
+		const laterClaim = service.claim(laterDelivery.id, NOW);
+		if (laterClaim?.leaseToken === undefined) throw new Error('Expected lease token.');
+		service.succeed(laterDelivery.id, laterClaim.leaseToken, NOW + 1_000);
+		eventStore.beforeRemove = () => {
+			eventStore.beforeRemove = null;
+			service.enqueue(event('cleanup-race'), ['dingtalk']);
+		};
+
+		expect(() => service.cleanup(NOW + 30 * DAY + 1_001)).toThrow('Webhook outbox storage operation failed.');
+		expect(service.getEvent('cleanup-race')).not.toBeNull();
+		expect(service.getEvent('cleanup-after-conflict')).not.toBeNull();
+		expect(service.listDeliveries()).toEqual([
+			expect.objectContaining({ eventId: 'cleanup-race', platform: 'dingtalk', status: 'pending' }),
+		]);
+	});
+
+	it('surfaces revision conflicts from claim, succeed, fail, retryBlocked, and cleanup', () => {
+		const claimHarness = createHarness();
+		const [claimDelivery] = claimHarness.service.enqueue(event('claim-conflict'), ['feishu']);
+		if (claimDelivery === undefined) throw new Error('Expected delivery.');
+		claimHarness.deliveryStore.nextWriteResult = { status: 'conflict' };
+		expect(() => claimHarness.service.claim(claimDelivery.id, NOW)).toThrow('Webhook outbox storage operation failed.');
+
+		const succeedHarness = createHarness();
+		const [succeedDelivery] = succeedHarness.service.enqueue(event('succeed-conflict'), ['feishu']);
+		if (succeedDelivery === undefined) throw new Error('Expected delivery.');
+		const succeedClaim = succeedHarness.service.claim(succeedDelivery.id, NOW);
+		if (succeedClaim?.leaseToken === undefined) throw new Error('Expected lease token.');
+		const succeedLeaseToken = succeedClaim.leaseToken;
+		succeedHarness.deliveryStore.nextWriteResult = { status: 'conflict' };
+		expect(() => succeedHarness.service.succeed(succeedDelivery.id, succeedLeaseToken, NOW + 1)).toThrow(
+			'Webhook outbox storage operation failed.',
+		);
+
+		const failHarness = createHarness();
+		const [failDelivery] = failHarness.service.enqueue(event('fail-conflict'), ['feishu']);
+		if (failDelivery === undefined) throw new Error('Expected delivery.');
+		const failClaim = failHarness.service.claim(failDelivery.id, NOW);
+		if (failClaim?.leaseToken === undefined) throw new Error('Expected lease token.');
+		const failLeaseToken = failClaim.leaseToken;
+		failHarness.deliveryStore.nextWriteResult = { status: 'conflict' };
+		expect(() => failHarness.service.fail(failDelivery.id, failLeaseToken, 'timeout', NOW + 1)).toThrow(
+			'Webhook outbox storage operation failed.',
+		);
+
+		const retryHarness = createHarness();
+		const [retryDelivery] = retryHarness.service.enqueue(event('retry-conflict'), ['feishu']);
+		if (retryDelivery === undefined) throw new Error('Expected delivery.');
+		const retryClaim = retryHarness.service.claim(retryDelivery.id, NOW);
+		if (retryClaim?.leaseToken === undefined) throw new Error('Expected lease token.');
+		retryHarness.service.fail(retryDelivery.id, retryClaim.leaseToken, 'unknown', NOW + 1);
+		retryHarness.deliveryStore.nextWriteResult = { status: 'conflict' };
+		expect(() => retryHarness.service.retryBlocked()).toThrow('Webhook outbox storage operation failed.');
+
+		const cleanupHarness = createHarness();
+		const [cleanupDelivery] = cleanupHarness.service.enqueue(event('cleanup-conflict'), ['feishu']);
+		if (cleanupDelivery === undefined) throw new Error('Expected delivery.');
+		const cleanupClaim = cleanupHarness.service.claim(cleanupDelivery.id, NOW);
+		if (cleanupClaim?.leaseToken === undefined) throw new Error('Expected lease token.');
+		cleanupHarness.service.succeed(cleanupDelivery.id, cleanupClaim.leaseToken, NOW + 1);
+		cleanupHarness.deliveryStore.nextRemoveResult = { status: 'conflict' };
+		expect(() => cleanupHarness.service.cleanup(NOW + 30 * DAY + 2)).toThrow(
+			'Webhook outbox storage operation failed.',
+		);
+	});
+
 	it('throws generic errors for storage conflicts and failures', () => {
 		const conflictHarness = createHarness();
 		conflictHarness.eventStore.nextWriteResult = { status: 'conflict', message: 'secret token leaked here' };
-		expect(() => conflictHarness.service.enqueue(event(), ['feishu'])).toThrow('Webhook outbox storage operation failed.');
-		expect(() => conflictHarness.service.enqueue(event(), ['feishu'])).not.toThrow('secret token leaked here');
+		let caught: unknown;
+		try {
+			conflictHarness.service.enqueue(event(), ['feishu']);
+		} catch (error: unknown) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(Error);
+		expect((caught as Error).message).toBe('Webhook outbox storage operation failed.');
+		expect((caught as Error).message).not.toContain('secret token leaked here');
 
 		const errorHarness = createHarness();
 		errorHarness.deliveryStore.nextWriteResult = { status: 'error', message: 'https://secret.example/token' };

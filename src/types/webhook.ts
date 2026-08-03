@@ -89,6 +89,7 @@ export interface WebhookDeliveryRecord {
 	updatedAt: number;
 	nextAttemptAt?: number;
 	leaseExpiresAt?: number;
+	leaseToken?: string;
 	succeededAt?: number;
 	errorCode?: WebhookErrorCode;
 }
