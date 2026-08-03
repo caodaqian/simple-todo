@@ -472,6 +472,27 @@ describe('webhookOutboxService', () => {
 		]));
 	});
 
+	it('keeps legacy raw events and empty envelopes when cleanup finds no deliveries', () => {
+		const { service, eventStore } = createHarness();
+		const rawEvent = event('legacy-raw');
+		const emptyEnvelopeEvent = event('legacy-envelope');
+		eventStore.write({
+			_id: `${STORAGE_KEYS.WEBHOOK_EVENT_DOCUMENT_PREFIX}${rawEvent.id}`,
+			data: rawEvent,
+		});
+		eventStore.write({
+			_id: `${STORAGE_KEYS.WEBHOOK_EVENT_DOCUMENT_PREFIX}${emptyEnvelopeEvent.id}`,
+			data: {
+				event: emptyEnvelopeEvent,
+				targetPlatforms: [],
+			},
+		});
+
+		expect(service.cleanup(NOW + 30 * DAY + 1_001)).toEqual({ events: 0, deliveries: 0 });
+		expect(service.getEvent(rawEvent.id)).toEqual(rawEvent);
+		expect(service.getEvent(emptyEnvelopeEvent.id)).toEqual(emptyEnvelopeEvent);
+	});
+
 	it('keeps the event and new platform delivery when cleanup races with enqueue', () => {
 		const { service, eventStore } = createHarness();
 		const [delivery] = service.enqueue(event('cleanup-race'), ['feishu']);

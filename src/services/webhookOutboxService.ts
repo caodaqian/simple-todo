@@ -346,7 +346,7 @@ export const createWebhookOutboxService = (deps: WebhookOutboxDependencies = {})
 			for (const eventDocument of eventDocuments) {
 				const envelope = readEventEnvelope(eventDocument.data);
 				const deliveries = deliveryDocuments.filter((document) => document.data.eventId === envelope.event.id);
-				const allTargetsSucceeded = envelope.targetPlatforms.every((platform) => deliveries.some((document) => (
+				const allTargetsSucceeded = envelope.targetPlatforms.length > 0 && envelope.targetPlatforms.every((platform) => deliveries.some((document) => (
 					document.data.platform === platform
 					&& document.data.status === 'succeeded'
 					&& document.data.succeededAt !== undefined
