@@ -284,13 +284,35 @@ describe('sendWebhook', () => {
 		expect(JSON.stringify(result)).not.toContain('raw sensitive response');
 	});
 
-	it('rejects a request larger than 20 KiB without creating a request', async () => {
-		const request = vi.fn();
+	it('sends long raw text when the final truncated body stays within 20 KiB', async () => {
+		const harness = createRequestHarness({ statusCode: 200, body: '{"code":0}' });
 
-		const result = await sendWebhook('feishu', feishuCredentials, { title: '简悦清单', text: '内'.repeat(7000) }, { lookup: publicLookup, request });
+		const result = await sendWebhook('feishu', feishuCredentials, { title: '简悦清单', text: '内'.repeat(7000) }, {
+			lookup: publicLookup,
+			request: harness.request,
+		});
+
+		expect(result).toEqual({ ok: true, status: 200 });
+		expect(Buffer.byteLength(harness.getRequestBody(), 'utf8')).toBeLessThanOrEqual(20 * 1024);
+		expect(JSON.parse(harness.getRequestBody()).content.text).toHaveLength(4000);
+	});
+
+	it('rejects a final request body larger than 20 KiB without creating a request', async () => {
+		const harness = createRequestHarness({ statusCode: 200, body: '{"code":0}' });
+		const oversizedBody = 'x'.repeat(20 * 1024 + 1);
+
+		const result = await sendWebhook('feishu', feishuCredentials, testMessage, {
+			lookup: publicLookup,
+			request: harness.request,
+			buildRequest: () => ({
+				url: feishuCredentials.url,
+				body: oversizedBody,
+				headers: {},
+			}),
+		});
 
 		expect(result).toEqual({ ok: false, errorCode: 'invalid_request' });
-		expect(request).not.toHaveBeenCalled();
+		expect(harness.request).not.toHaveBeenCalled();
 	});
 
 	it('rejects and destroys a response larger than 64 KiB', async () => {

@@ -245,16 +245,13 @@ function mapHttpStatus(status) {
 async function sendWebhook(platform, credentials, message, deps) {
   const dependencies = deps || {}
   const request = dependencies.request || https.request
+  const buildRequest = dependencies.buildRequest || buildWebhookRequest
   const now = typeof dependencies.now === 'function' ? dependencies.now() : Date.now()
-  const rawText = message && message.text != null ? String(message.text) : ''
-  if (Buffer.byteLength(rawText, 'utf8') > MAX_REQUEST_BYTES) {
-    return { ok: false, errorCode: 'invalid_request' }
-  }
 
   let built
   let resolved
   try {
-    built = buildWebhookRequest(platform, credentials, message, now)
+    built = buildRequest(platform, credentials, message, now)
     if (Buffer.byteLength(built.body, 'utf8') > MAX_REQUEST_BYTES) {
       return { ok: false, errorCode: 'invalid_request' }
     }
