@@ -31,6 +31,7 @@ const {
 } = require('./toolHandlers')
 const { fetchPageTitle } = require('./linkTitle')
 const { createWebhookCredentialStore } = require('./webhookCredentials')
+const webhookClient = require('./webhookClient')
 
 const webhookCredentialStore = createWebhookCredentialStore(window.utools && window.utools.dbCryptoStorage)
 
@@ -174,6 +175,14 @@ window.services = {
     },
     async clearCredentials(platform) {
       webhookCredentialStore.clear(platform)
+    },
+    async testCredentials(platform) {
+      const credentials = webhookCredentialStore.read(platform)
+      if (!credentials) return { ok: false, errorCode: 'invalid_credentials' }
+      return webhookClient.sendWebhook(platform, credentials, {
+        title: '简悦清单',
+        text: '简悦清单机器人通知测试',
+      })
     },
   },
 

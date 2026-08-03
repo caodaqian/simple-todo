@@ -1,6 +1,11 @@
 const crypto = require('node:crypto')
 const dns = require('node:dns').promises
+const https = require('node:https')
 const net = require('node:net')
+
+const MAX_REQUEST_BYTES = 20 * 1024
+const MAX_RESPONSE_BYTES = 64 * 1024
+const REQUEST_TIMEOUT_MS = 5000
 
 const HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
@@ -122,7 +127,7 @@ function parsePlatformUrl(platform, value) {
   return parsed
 }
 
-async function validateWebhookUrl(platform, value, deps) {
+async function resolveWebhookUrl(platform, value, deps) {
   const parsed = parsePlatformUrl(platform, value)
   const lookup = deps && deps.lookup ? deps.lookup : dns.lookup
   let records
@@ -135,7 +140,12 @@ async function validateWebhookUrl(platform, value, deps) {
   if (!normalized.length || normalized.some((record) => !record || isNonPublicIp(record.address))) {
     throw new Error('Webhook 地址无效')
   }
-  return parsed
+  return { parsed, records: normalized }
+}
+
+async function validateWebhookUrl(platform, value, deps) {
+  const resolved = await resolveWebhookUrl(platform, value, deps)
+  return resolved.parsed
 }
 
 function normalizeField(value, maxLength) {
@@ -183,4 +193,139 @@ function buildWebhookRequest(platform, credentials, message, now) {
   return { url: parsed.href, body: JSON.stringify(payload), headers: { ...HEADERS } }
 }
 
-module.exports = { buildWebhookRequest, formatWebhookMessage, validateWebhookUrl }
+function createFixedLookup(expectedHost, records) {
+  return function fixedLookup(hostname, options, callback) {
+    if (typeof options === 'function') {
+      callback = options
+      options = {}
+    }
+    const normalizedOptions = typeof options === 'number' ? { family: options } : (options || {})
+    if (hostname !== expectedHost) {
+      callback(new Error('DNS lookup rejected'))
+      return
+    }
+    if (normalizedOptions.all) {
+      callback(null, records.map(function (record) { return { address: record.address, family: record.family } }))
+      return
+    }
+    const family = Number(normalizedOptions.family) || 0
+    const selected = records.find(function (record) { return !family || record.family === family })
+    if (!selected) {
+      callback(new Error('DNS family unavailable'))
+      return
+    }
+    callback(null, selected.address, selected.family)
+  }
+}
+
+function normalizeBusinessResponse(platform, value, status) {
+  if (!value || typeof value !== 'object') return { ok: false, status, errorCode: 'invalid_request' }
+  if (platform === 'feishu') {
+    if (value.code === 0) return { ok: true, status }
+    if (value.code === 19021) return { ok: false, status, errorCode: 'invalid_credentials' }
+    if (value.code === 19024) return { ok: false, status, errorCode: 'keyword_mismatch' }
+    return { ok: false, status, errorCode: 'invalid_request' }
+  }
+
+  if (value.errcode === 0) return { ok: true, status }
+  const message = typeof value.errmsg === 'string' ? value.errmsg : ''
+  if (/keyword|关键词|关键字/i.test(message)) return { ok: false, status, errorCode: 'keyword_mismatch' }
+  if (/sign|signature|签名|timestamp|时间戳/i.test(message)) return { ok: false, status, errorCode: 'invalid_credentials' }
+  return { ok: false, status, errorCode: 'invalid_request' }
+}
+
+function mapHttpStatus(status) {
+  if (status >= 300 && status < 400) return 'invalid_request'
+  if (status === 429) return 'rate_limited'
+  if (status >= 500) return 'server_error'
+  if (status < 200 || status >= 300) return 'invalid_request'
+  return null
+}
+
+async function sendWebhook(platform, credentials, message, deps) {
+  const dependencies = deps || {}
+  const request = dependencies.request || https.request
+  const now = typeof dependencies.now === 'function' ? dependencies.now() : Date.now()
+  const rawText = message && message.text != null ? String(message.text) : ''
+  if (Buffer.byteLength(rawText, 'utf8') > MAX_REQUEST_BYTES) {
+    return { ok: false, errorCode: 'invalid_request' }
+  }
+
+  let built
+  let resolved
+  try {
+    built = buildWebhookRequest(platform, credentials, message, now)
+    if (Buffer.byteLength(built.body, 'utf8') > MAX_REQUEST_BYTES) {
+      return { ok: false, errorCode: 'invalid_request' }
+    }
+    resolved = await resolveWebhookUrl(platform, credentials.url, dependencies)
+  } catch {
+    return { ok: false, errorCode: 'invalid_request' }
+  }
+
+  return new Promise(function (resolve) {
+    let settled = false
+    function finish(result) {
+      if (settled) return
+      settled = true
+      resolve(result)
+    }
+
+    let clientRequest
+    try {
+      clientRequest = request(built.url, {
+        method: 'POST',
+        headers: built.headers,
+        lookup: createFixedLookup(resolved.parsed.hostname, resolved.records),
+      }, function (response) {
+        const status = Number(response.statusCode) || 0
+        const chunks = []
+        let bytes = 0
+
+        response.on('data', function (chunk) {
+          if (settled) return
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+          bytes += buffer.length
+          if (bytes > MAX_RESPONSE_BYTES) {
+            finish({ ok: false, status, errorCode: 'invalid_request' })
+            if (typeof response.destroy === 'function') response.destroy()
+            return
+          }
+          chunks.push(buffer)
+        })
+        response.on('error', function () {
+          finish({ ok: false, status: status || undefined, errorCode: 'network_error' })
+        })
+        response.on('end', function () {
+          if (settled) return
+          const httpError = mapHttpStatus(status)
+          if (httpError) {
+            finish({ ok: false, status, errorCode: httpError })
+            return
+          }
+          try {
+            const value = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+            finish(normalizeBusinessResponse(platform, value, status))
+          } catch {
+            finish({ ok: false, status, errorCode: 'invalid_request' })
+          }
+        })
+      })
+    } catch {
+      finish({ ok: false, errorCode: 'network_error' })
+      return
+    }
+
+    clientRequest.on('error', function () {
+      finish({ ok: false, errorCode: 'network_error' })
+    })
+    clientRequest.setTimeout(REQUEST_TIMEOUT_MS, function () {
+      finish({ ok: false, errorCode: 'timeout' })
+      if (typeof clientRequest.destroy === 'function') clientRequest.destroy()
+    })
+    clientRequest.write(built.body)
+    clientRequest.end()
+  })
+}
+
+module.exports = { buildWebhookRequest, formatWebhookMessage, sendWebhook, validateWebhookUrl }

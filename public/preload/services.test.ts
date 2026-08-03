@@ -1,9 +1,14 @@
+import { createRequire } from 'node:module';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import plugin from '../plugin.json';
+
+const require = createRequire(import.meta.url);
+const webhookClient = require('./webhookClient.js') as { sendWebhook: typeof vi.fn };
 
 describe('MCP tool registration', () => {
 	beforeEach(() => {
 		vi.resetModules();
+		vi.restoreAllMocks();
 		window.utools = {
 			...(window.utools ?? {}),
 			dbStorage: { getItem: vi.fn(), setItem: vi.fn() },
@@ -17,8 +22,38 @@ describe('MCP tool registration', () => {
 	it('exposes only the narrow webhook credential API to the renderer', async () => {
 		await import('./services.js');
 
-		expect(Object.keys(window.services.webhooks).sort()).toEqual(['clearCredentials', 'getStatuses', 'saveCredentials']);
+		expect(Object.keys(window.services.webhooks).sort()).toEqual(['clearCredentials', 'getStatuses', 'saveCredentials', 'testCredentials']);
 		expect(window.services.webhooks).not.toHaveProperty('read');
+		expect(window.services.webhooks).not.toHaveProperty('sendWebhook');
+		expect(window.services.webhooks).not.toHaveProperty('send');
+	});
+
+	it('returns invalid_credentials when testing an unconfigured webhook', async () => {
+		const sendWebhookMock = vi.spyOn(webhookClient, 'sendWebhook');
+		await import('./services.js');
+
+		const result = await window.services.webhooks.testCredentials('feishu');
+
+		expect(result).toEqual({ ok: false, errorCode: 'invalid_credentials' });
+		expect(sendWebhookMock).not.toHaveBeenCalled();
+	});
+
+	it('tests stored credentials with the fixed notification message', async () => {
+		const credentials = {
+			url: 'https://open.feishu.cn/open-apis/bot/v2/hook/sensitive-token',
+			secret: 'sensitive-secret',
+		};
+		window.utools!.dbCryptoStorage!.getItem = vi.fn(() => credentials);
+		await import('./services.js');
+		const sendWebhookMock = vi.spyOn(webhookClient, 'sendWebhook').mockResolvedValue({ ok: true, status: 200 });
+
+		const result = await window.services.webhooks.testCredentials('feishu');
+
+		expect(result).toEqual({ ok: true, status: 200 });
+		expect(sendWebhookMock).toHaveBeenCalledWith('feishu', credentials, {
+			title: '简悦清单',
+			text: '简悦清单机器人通知测试',
+		});
 	});
 
 	it('routes webhook credential status and writes only through dbCryptoStorage', async () => {

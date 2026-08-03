@@ -2,10 +2,17 @@
 
 type WebhookPlatform = import('./types/webhook').WebhookPlatform;
 type WebhookTargetStatus = import('./types/webhook').WebhookTargetStatus;
+type WebhookErrorCode = import('./types/webhook').WebhookErrorCode;
 
 interface WebhookCredentialInput {
 	url: string;
 	secret?: string;
+}
+
+interface WebhookTestResult {
+	ok: boolean;
+	status?: number;
+	errorCode?: WebhookErrorCode;
 }
 
 interface WindowServices {
@@ -13,6 +20,7 @@ interface WindowServices {
 		getStatuses(): Promise<WebhookTargetStatus[]>;
 		saveCredentials(platform: WebhookPlatform, input: WebhookCredentialInput): Promise<WebhookTargetStatus>;
 		clearCredentials(platform: WebhookPlatform): Promise<void>;
+		testCredentials(platform: WebhookPlatform): Promise<WebhookTestResult>;
 	};
 	fetchPageTitle(url: string): Promise<string>;
 	readFile(file: string): string;

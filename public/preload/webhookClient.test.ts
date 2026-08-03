@@ -1,7 +1,57 @@
+import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { buildWebhookRequest, formatWebhookMessage, validateWebhookUrl } from './webhookClient.js';
+import { buildWebhookRequest, formatWebhookMessage, sendWebhook, validateWebhookUrl } from './webhookClient.js';
 
 const publicLookup = vi.fn(async () => [{ address: '8.8.8.8', family: 4 }]);
+
+function createRequestHarness(response: { statusCode: number; body?: string } | null) {
+	let requestOptions: Record<string, unknown> | undefined;
+	let requestBody = '';
+	const request = vi.fn((_url: string, options: Record<string, unknown>, callback: (response: EventEmitter & { statusCode: number; destroy: ReturnType<typeof vi.fn> }) => void) => {
+		requestOptions = options;
+		const client = new EventEmitter() as EventEmitter & {
+			setTimeout: (timeout: number, handler: () => void) => void;
+			write: (chunk: string) => void;
+			end: () => void;
+			destroy: ReturnType<typeof vi.fn>;
+			triggerTimeout: () => void;
+		};
+		let timeoutHandler = () => {};
+		client.setTimeout = vi.fn((timeout: number, handler: () => void) => {
+			timeoutHandler = handler;
+		});
+		client.write = vi.fn((chunk: string) => {
+			requestBody += chunk;
+		});
+		client.destroy = vi.fn();
+		client.triggerTimeout = () => timeoutHandler();
+		client.end = vi.fn(() => {
+			if (!response) return;
+			queueMicrotask(() => {
+				const incoming = new EventEmitter() as EventEmitter & { statusCode: number; destroy: ReturnType<typeof vi.fn> };
+				incoming.statusCode = response.statusCode;
+				incoming.destroy = vi.fn();
+				callback(incoming);
+				if (response.body) incoming.emit('data', Buffer.from(response.body));
+				incoming.emit('end');
+			});
+		});
+		return client;
+	});
+
+	return {
+		request,
+		getRequestOptions: () => requestOptions,
+		getRequestBody: () => requestBody,
+	};
+}
+
+const feishuCredentials = {
+	url: 'https://open.feishu.cn/open-apis/bot/v2/hook/sensitive-token',
+	secret: 'sensitive-secret',
+};
+
+const testMessage = { title: '简悦清单', text: '简悦清单机器人通知测试' };
 
 describe('webhookClient request builders', () => {
 	it('accepts only the official Feishu robot endpoint', async () => {
@@ -149,5 +199,137 @@ describe('webhookClient request builders', () => {
 		expect(message.title.startsWith('标')).toBe(true);
 		expect(message.text.startsWith('第一行\n第二行\n第三行\n')).toBe(true);
 		expect(message.text).not.toContain('\r');
+	});
+});
+
+describe('sendWebhook', () => {
+	it.each([
+		['feishu', feishuCredentials, '{"code":0}'],
+		['dingtalk', { url: 'https://oapi.dingtalk.com/robot/send?access_token=sensitive-token' }, '{"errcode":0}'],
+	] as const)('sends a successful %s request', async (platform, credentials, responseBody) => {
+		const harness = createRequestHarness({ statusCode: 200, body: responseBody });
+
+		const result = await sendWebhook(platform, credentials, testMessage, {
+			lookup: publicLookup,
+			request: harness.request,
+			now: () => 1599360473000,
+		});
+
+		expect(result).toEqual({ ok: true, status: 200 });
+		expect(harness.getRequestOptions()).toMatchObject({ method: 'POST', headers: buildWebhookRequest(platform, credentials, testMessage, 1599360473000).headers });
+		expect(harness.getRequestBody()).toBe(buildWebhookRequest(platform, credentials, testMessage, 1599360473000).body);
+	});
+
+	it.each([
+		[302, 'invalid_request'],
+		[429, 'rate_limited'],
+		[503, 'server_error'],
+	] as const)('maps HTTP %s without following redirects', async (statusCode, errorCode) => {
+		const harness = createRequestHarness({ statusCode, body: '{"code":0}' });
+
+		const result = await sendWebhook('feishu', feishuCredentials, testMessage, { lookup: publicLookup, request: harness.request });
+
+		expect(result).toEqual({ ok: false, status: statusCode, errorCode });
+	});
+
+	it('maps request timeout without leaking the request error', async () => {
+		let client: (EventEmitter & { triggerTimeout: () => void }) | undefined;
+		const request = vi.fn(() => {
+			client = new EventEmitter() as EventEmitter & { triggerTimeout: () => void; setTimeout: (timeout: number, handler: () => void) => void; write: () => void; end: () => void; destroy: () => void };
+			let timeoutHandler = () => {};
+			client.setTimeout = vi.fn((timeout: number, handler: () => void) => { timeoutHandler = handler; });
+			client.triggerTimeout = () => timeoutHandler();
+			client.write = vi.fn();
+			client.end = vi.fn(() => queueMicrotask(() => client?.triggerTimeout()));
+			client.destroy = vi.fn(() => client?.emit('error', new Error('socket timeout')));
+			return client;
+		});
+
+		const result = await sendWebhook('feishu', feishuCredentials, testMessage, { lookup: publicLookup, request });
+
+		expect(result).toEqual({ ok: false, errorCode: 'timeout' });
+		expect(client?.setTimeout).toHaveBeenCalledWith(5000, expect.any(Function));
+	});
+
+	it('maps network errors to a redacted result', async () => {
+		const request = vi.fn(() => {
+			const client = new EventEmitter() as EventEmitter & { setTimeout: () => void; write: () => void; end: () => void; destroy: () => void };
+			client.setTimeout = vi.fn();
+			client.write = vi.fn();
+			client.destroy = vi.fn();
+			client.end = vi.fn(() => queueMicrotask(() => client.emit('error', new Error(`failed ${feishuCredentials.url} ${feishuCredentials.secret}`))));
+			return client;
+		});
+
+		const result = await sendWebhook('feishu', feishuCredentials, testMessage, { lookup: publicLookup, request });
+
+		expect(result).toEqual({ ok: false, errorCode: 'network_error' });
+		expect(JSON.stringify(result)).not.toContain('sensitive');
+		expect(JSON.stringify(result)).not.toContain('failed');
+	});
+
+	it.each([
+		['feishu', feishuCredentials, '{"code":19021,"msg":"signature failed"}', 'invalid_credentials'],
+		['feishu', feishuCredentials, '{"code":19024,"msg":"keyword mismatch"}', 'keyword_mismatch'],
+		['feishu', feishuCredentials, '{"code":99999,"msg":"raw sensitive response"}', 'invalid_request'],
+		['dingtalk', { url: 'https://oapi.dingtalk.com/robot/send?access_token=sensitive-token' }, '{"errcode":310000,"errmsg":"sign not match"}', 'invalid_credentials'],
+		['dingtalk', { url: 'https://oapi.dingtalk.com/robot/send?access_token=sensitive-token' }, '{"errcode":310000,"errmsg":"keywords not in content"}', 'keyword_mismatch'],
+		['dingtalk', { url: 'https://oapi.dingtalk.com/robot/send?access_token=sensitive-token' }, '{"errcode":40035,"errmsg":"raw sensitive response"}', 'invalid_request'],
+	] as const)('normalizes %s business errors without exposing the response', async (platform, credentials, body, errorCode) => {
+		const harness = createRequestHarness({ statusCode: 200, body });
+
+		const result = await sendWebhook(platform, credentials, testMessage, { lookup: publicLookup, request: harness.request });
+
+		expect(result).toEqual({ ok: false, status: 200, errorCode });
+		expect(JSON.stringify(result)).not.toContain('raw sensitive response');
+	});
+
+	it('rejects a request larger than 20 KiB without creating a request', async () => {
+		const request = vi.fn();
+
+		const result = await sendWebhook('feishu', feishuCredentials, { title: '简悦清单', text: '内'.repeat(7000) }, { lookup: publicLookup, request });
+
+		expect(result).toEqual({ ok: false, errorCode: 'invalid_request' });
+		expect(request).not.toHaveBeenCalled();
+	});
+
+	it('rejects and destroys a response larger than 64 KiB', async () => {
+		let incoming: (EventEmitter & { destroy: ReturnType<typeof vi.fn> }) | undefined;
+		const request = vi.fn((_url: string, _options: unknown, callback: (response: EventEmitter & { statusCode: number; destroy: ReturnType<typeof vi.fn> }) => void) => {
+			const client = new EventEmitter() as EventEmitter & { setTimeout: () => void; write: () => void; end: () => void; destroy: () => void };
+			client.setTimeout = vi.fn();
+			client.write = vi.fn();
+			client.destroy = vi.fn();
+			client.end = vi.fn(() => queueMicrotask(() => {
+				incoming = new EventEmitter() as EventEmitter & { statusCode: number; destroy: ReturnType<typeof vi.fn> };
+				incoming.statusCode = 200;
+				incoming.destroy = vi.fn(() => incoming?.emit('error', new Error('response too large')));
+				callback(incoming);
+				incoming.emit('data', Buffer.alloc(64 * 1024 + 1));
+			}));
+			return client;
+		});
+
+		const result = await sendWebhook('feishu', feishuCredentials, testMessage, { lookup: publicLookup, request });
+
+		expect(result).toEqual({ ok: false, status: 200, errorCode: 'invalid_request' });
+		expect(incoming?.destroy).toHaveBeenCalled();
+	});
+
+	it('pins the validated DNS records in the request lookup', async () => {
+		const records = [
+			{ address: '8.8.8.8', family: 4 },
+			{ address: '2001:4860:4860::8888', family: 6 },
+		];
+		const lookup = vi.fn(async () => records);
+		const harness = createRequestHarness({ statusCode: 200, body: '{"code":0}' });
+
+		await sendWebhook('feishu', feishuCredentials, testMessage, { lookup, request: harness.request });
+		const fixedLookup = harness.getRequestOptions()?.lookup as (hostname: string, options: { all?: boolean }, callback: (error: Error | null, addresses: unknown, family?: number) => void) => void;
+		const callback = vi.fn();
+		fixedLookup('open.feishu.cn', { all: true }, callback);
+
+		expect(lookup).toHaveBeenCalledTimes(1);
+		expect(callback).toHaveBeenCalledWith(null, records);
 	});
 });
