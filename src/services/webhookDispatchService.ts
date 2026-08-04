@@ -76,7 +76,7 @@ export const createWebhookDispatchService = (
 			throw new Error('Cannot create a due webhook event without a task deadline.');
 		}
 		return {
-			id: `task.due:${task.id}:${reminderAt}`,
+			id: `task.due:${task.id}:${dueAt}:${reminderAt}`,
 			type: 'task.due',
 			occurredAt,
 			payload: {
@@ -129,7 +129,7 @@ export const createWebhookDispatchService = (
 					else result.failed += 1;
 				}
 			} catch {
-				const failed = outbox.fail(claimed.id, claimed.leaseToken, 'unknown', clock());
+				const failed = outbox.fail(claimed.id, claimed.leaseToken, 'network_error', clock());
 				if (failed === null) result.skipped += 1;
 				else result.failed += 1;
 			}

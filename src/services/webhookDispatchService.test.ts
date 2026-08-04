@@ -9,28 +9,50 @@ import type {
 import type { WebhookOutboxService } from './webhookOutboxService';
 import { createWebhookDispatchService } from './webhookDispatchService';
 
-const makeTask = (overrides: Partial<Task> = {}): Task => ({
-	id: 'task-1',
-	title: '提交报告',
-	status: 'todo',
-	dueEnd: 2_000,
-	priority: 'high',
-	tags: ['工作'],
-	group: '项目 A',
-	description: '说明',
-	subtasks: [],
-	createdAt: 100,
-	updatedAt: 200,
-	...overrides,
-});
+type TaskOverrides = Partial<Omit<Task, 'dueDate' | 'dueStart' | 'dueEnd'>> & {
+	dueDate?: number | undefined;
+	dueStart?: number | undefined;
+	dueEnd?: number | undefined;
+};
+
+const makeTask = (overrides: TaskOverrides = {}): Task => {
+	const { dueDate, dueStart, dueEnd, ...fields } = overrides;
+	const task: Task = {
+		id: 'task-1',
+		title: '提交报告',
+		status: 'todo',
+		dueEnd: 2_000,
+		priority: 'high',
+		tags: ['工作'],
+		group: '项目 A',
+		description: '说明',
+		subtasks: [],
+		createdAt: 100,
+		updatedAt: 200,
+		...fields,
+	};
+	if ('dueDate' in overrides) {
+		if (dueDate === undefined) delete task.dueDate;
+		else task.dueDate = dueDate;
+	}
+	if ('dueStart' in overrides) {
+		if (dueStart === undefined) delete task.dueStart;
+		else task.dueStart = dueStart;
+	}
+	if ('dueEnd' in overrides) {
+		if (dueEnd === undefined) delete task.dueEnd;
+		else task.dueEnd = dueEnd;
+	}
+	return task;
+};
 
 const makeDelivery = (
 	overrides: Partial<WebhookDeliveryRecord> = {},
 ): WebhookDeliveryRecord => ({
 	id: 'delivery-1',
-	eventId: 'task.due:task-1:1500',
+	eventId: 'task.due:task-1:2000:1500',
 	platform: 'feishu',
-	dedupeKey: 'feishu:task.due:task-1:1500',
+	dedupeKey: 'feishu:task.due:task-1:2000:1500',
 	status: 'pending',
 	attempts: 0,
 	createdAt: 1_500,
@@ -40,7 +62,7 @@ const makeDelivery = (
 });
 
 const makeDueEvent = (): WebhookDomainEvent => ({
-	id: 'task.due:task-1:1500',
+	id: 'task.due:task-1:2000:1500',
 	type: 'task.due',
 	occurredAt: 1_500,
 	payload: {
@@ -88,6 +110,28 @@ describe('webhookDispatchService', () => {
 		expect(second.id).toBe(first.id);
 		expect(first.payload.task.title).toBe('提交报告');
 		expect(first.payload.task.tags).toEqual(['工作']);
+	});
+
+	it('includes the effective deadline in the stable event identity and honors deadline precedence', () => {
+		const service = createWebhookDispatchService({
+			outbox: createOutboxMock(),
+			clock: () => 1_500,
+			sendEvent: vi.fn(),
+			getKeyword: vi.fn(),
+		});
+
+		const ranged = service.createDueEvent(makeTask({ dueDate: 500, dueStart: 1_000, dueEnd: 2_000 }), 1_500);
+		const point = service.createDueEvent(makeTask({ dueEnd: undefined, dueStart: 1_800 }), 1_500);
+		const legacy = service.createDueEvent(makeTask({ dueEnd: undefined, dueStart: undefined, dueDate: 1_700 }), 1_500);
+		const changedDeadline = service.createDueEvent(makeTask({ dueEnd: 2_500 }), 1_500);
+
+		expect(ranged.id).toBe('task.due:task-1:2000:1500');
+		expect(point.payload.task.dueAt).toBe(1_800);
+		expect(legacy.payload.task.dueAt).toBe(1_700);
+		expect(changedDeadline.id).toBe('task.due:task-1:2500:1500');
+		expect(() => service.createDueEvent(makeTask({ dueEnd: undefined }), 1_500)).toThrow(
+			'Cannot create a due webhook event without a task deadline.',
+		);
 	});
 
 	it('delegates enqueue without duplicating outbox behavior', () => {
@@ -166,7 +210,7 @@ describe('webhookDispatchService', () => {
 		const result = await service.drain();
 
 		expect(result).toEqual({ claimed: 2, succeeded: 0, failed: 0, skipped: 3 });
-		expect(outbox.fail).toHaveBeenCalledWith('delivery-2', 'lease-b', 'unknown', 2_000);
+		expect(outbox.fail).toHaveBeenCalledWith('delivery-2', 'lease-b', 'network_error', 2_000);
 		expect(outbox.succeed).toHaveBeenCalledWith('delivery-3', 'lease-c', 2_000);
 		expect(sendEvent).toHaveBeenCalledTimes(2);
 	});
@@ -198,5 +242,21 @@ describe('webhookDispatchService', () => {
 		await expect(first).resolves.toEqual({ claimed: 1, succeeded: 1, failed: 0, skipped: 0 });
 		await expect(second).resolves.toEqual({ claimed: 1, succeeded: 1, failed: 0, skipped: 0 });
 		expect(sendEvent).toHaveBeenCalledTimes(1);
+	});
+
+	it('releases the drain lock after completion so a later opportunity can retry', async () => {
+		const outbox = createOutboxMock();
+		vi.mocked(outbox.listReady).mockReturnValue([]);
+		const service = createWebhookDispatchService({
+			outbox,
+			clock: () => 2_000,
+			sendEvent: vi.fn(),
+			getKeyword: vi.fn(),
+		});
+
+		await service.drain();
+		await service.drain();
+
+		expect(outbox.listReady).toHaveBeenCalledTimes(2);
 	});
 });
