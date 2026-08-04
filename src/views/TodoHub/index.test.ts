@@ -3,13 +3,16 @@ import { createApp, defineComponent, nextTick, type PropType } from 'vue';
 import type { AppSettings, TodoView } from '../../types/settings';
 import type { TaskSearchFilter, TaskSortOption } from '../../types/task';
 
-const { settingsState, saveView, toggleViewStar, getUiState } = vi.hoisted(() => {
+const { settingsState, saveView, toggleViewStar, getUiState, catchUpReminders, drainWebhookReminders, useReminderScheduler } = vi.hoisted(() => {
 	const settingsState: { value: AppSettings } = { value: {} as AppSettings };
 	return {
 		settingsState,
 		saveView: vi.fn(),
 		toggleViewStar: vi.fn(),
 		getUiState: vi.fn(),
+		catchUpReminders: vi.fn(),
+		drainWebhookReminders: vi.fn(),
+		useReminderScheduler: vi.fn(),
 	};
 });
 
@@ -39,8 +42,9 @@ vi.mock('../../composables/useUtoolsTaskSearch', () => ({
 }));
 
 vi.mock('../../composables/useReminderScheduler', () => ({
-	catchUpReminders: vi.fn(),
-	useReminderScheduler: vi.fn(),
+	catchUpReminders,
+	drainWebhookReminders,
+	useReminderScheduler,
 }));
 
 vi.mock('../../services/stickyWindowService', () => ({ openStickyNoteWindow: vi.fn(() => ({ ok: true })) }));
@@ -108,7 +112,28 @@ const mountTodoHub = async (): Promise<HTMLElement> => {
 
 afterEach(() => {
 	document.body.innerHTML = '';
+	delete window.utools;
 	vi.clearAllMocks();
+});
+
+describe('TodoHub Webhook Outbox 生命周期', () => {
+	it('drains restored deliveries without regenerating reminder events', async () => {
+		settingsState.value = baseSettings();
+		getUiState.mockReturnValue({ currentView: 'list', activeSection: 'inbox', activeFilter: {}, activeSort: { field: 'dueDate' } });
+		let restore: (() => void) | undefined;
+		window.utools = {
+			onDbRestore: vi.fn((callback: () => void) => {
+				restore = callback;
+			}),
+			onPluginEnter: vi.fn(),
+		} as unknown as typeof window.utools;
+		await mountTodoHub();
+
+		restore?.();
+
+		expect(drainWebhookReminders).toHaveBeenCalledOnce();
+		expect(catchUpReminders).not.toHaveBeenCalled();
+	});
 });
 
 describe('TodoHub 保存视图', () => {

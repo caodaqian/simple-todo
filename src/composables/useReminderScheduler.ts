@@ -40,7 +40,7 @@ const enqueueDueWebhookEvents = (tasks: Task[]): void => {
 	}
 };
 
-const drainWebhookOutbox = (): void => {
+export const drainWebhookReminders = (): void => {
 	void webhookDispatchService.drain().catch(() => {
 		console.debug('Unable to drain webhook reminders');
 	});
@@ -73,7 +73,7 @@ const startRealtimePolling = (): (() => void) => {
 			}
 			markReminded(due);
 		}
-		drainWebhookOutbox();
+		drainWebhookReminders();
 	};
 	tick(); // 立即跑一次（含 mount/onPluginEnter 后的首次扫描）
 	const timer = window.setInterval(tick, CHECK_INTERVAL_MS);
@@ -98,7 +98,7 @@ export const catchUpReminders = (): void => {
 		}
 		markReminded(missed);
 	}
-	drainWebhookOutbox();
+	drainWebhookReminders();
 };
 
 /**

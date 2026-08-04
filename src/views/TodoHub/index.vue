@@ -8,7 +8,7 @@ import SettingsPanel from '../../components/SettingsPanel.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
 import TaskReviewPanel from '../../components/TaskReviewPanel.vue';
 import TemplateLibraryPanel from '../../components/TemplateLibraryPanel.vue';
-import { catchUpReminders, useReminderScheduler } from '../../composables/useReminderScheduler';
+import { catchUpReminders, drainWebhookReminders, useReminderScheduler } from '../../composables/useReminderScheduler';
 import { useUtoolsTaskSearch } from '../../composables/useUtoolsTaskSearch';
 import {
     getTaskDateRuleSummary,
@@ -396,6 +396,7 @@ import ListView from '../ListView/index.vue';
       (utools as unknown as { onDbRestore: (cb: () => void) => void }).onDbRestore(() => {
         loadTasks();
         reloadUiState();
+        drainWebhookReminders();
       });
     }
     // 启动提醒调度：窗口打开期间实时轮询 + 进入时补报漏掉的提醒。
