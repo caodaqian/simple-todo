@@ -439,4 +439,62 @@ describe('formatWebhookEvent', () => {
 		expect((error as Error).message).not.toContain('secret');
 		expect(() => formatWebhookEvent({ id: 'x', type: 'unknown', occurredAt: 1, payload: {} })).toThrow('Webhook event is invalid.');
 	});
+
+	it.each([
+		-1,
+		1.5,
+		Number.MAX_SAFE_INTEGER,
+	])('rejects invalid domain timestamps with the generic error', (timestamp) => {
+		const event = {
+			id: 'due-invalid-time',
+			type: 'task.due',
+			occurredAt: 2,
+			payload: {
+				task: {
+					id: 'task-1', title: '任务', description: '', priority: 'low', tags: [], group: '', dueAt: timestamp,
+				},
+				reminderAt: 1,
+			},
+		};
+
+		expect(() => formatWebhookEvent(event)).toThrow(new Error('Webhook event is invalid.'));
+	});
+
+	it.each([
+		{ activeCount: -1 },
+		{ activeCount: 1.5 },
+		{ periodStart: 2, periodEnd: 1 },
+		{ timezone: 'Not/A-Timezone' },
+	])('rejects semantically invalid daily digests', (override) => {
+		const digest = {
+			periodStart: 0,
+			periodEnd: 1,
+			timezone: 'Asia/Shanghai',
+			completed: [],
+			overdue: [],
+			due: [],
+			activeCount: 0,
+			...override,
+		};
+
+		expect(() => formatWebhookEvent({
+			id: 'digest-invalid', type: 'digest.daily', occurredAt: 1, payload: { digest },
+		})).toThrow(new Error('Webhook event is invalid.'));
+	});
+
+	it('rejects keywords that can replace or forge the structured event body', () => {
+		const event = {
+			id: 'completed-1',
+			type: 'task.completed',
+			occurredAt: 3,
+			payload: {
+				task: {
+					id: 'task-1', title: '任务', description: '', priority: 'low', tags: [], group: '', completedAt: 3,
+				},
+			},
+		};
+
+		expect(() => formatWebhookEvent(event, '第一行\n伪造字段')).toThrow('Webhook event is invalid.');
+		expect(() => formatWebhookEvent(event, 'x'.repeat(101))).toThrow('Webhook event is invalid.');
+	});
 });

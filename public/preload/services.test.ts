@@ -62,6 +62,29 @@ describe('MCP tool registration', () => {
 		expect(window.services.webhooks).not.toHaveProperty('send');
 	});
 
+	it('rejects unsupported event targets before reading credentials or sending', async () => {
+		const readMock = vi.mocked(window.utools!.dbCryptoStorage!.getItem);
+		const sendMock = vi.spyOn(webhookClient, 'sendWebhook');
+		await import('./services.js');
+
+		await expect((window.services.webhooks.sendEvent as Function)('slack', {})).rejects.toThrow('不支持的 Webhook 平台');
+		expect(readMock).not.toHaveBeenCalled();
+		expect(sendMock).not.toHaveBeenCalled();
+	});
+
+	it('does not send when structured event formatting fails', async () => {
+		window.utools!.dbCryptoStorage!.getItem = vi.fn(() => ({ url: 'https://oapi.dingtalk.com/robot/send?access_token=token' }));
+		const formatMock = vi.spyOn(webhookClient, 'formatWebhookEvent').mockImplementation(() => {
+			throw new Error('Webhook event is invalid.');
+		});
+		const sendMock = vi.spyOn(webhookClient, 'sendWebhook');
+		await import('./services.js');
+
+		await expect(window.services.webhooks.sendEvent('dingtalk', {} as never)).rejects.toThrow('Webhook event is invalid.');
+		expect(formatMock).toHaveBeenCalledOnce();
+		expect(sendMock).not.toHaveBeenCalled();
+	});
+
 	it('returns invalid_credentials when testing an unconfigured webhook', async () => {
 		const sendWebhookMock = vi.spyOn(webhookClient, 'sendWebhook');
 		await import('./services.js');

@@ -182,7 +182,25 @@ function requireTaskSnapshot(value) {
 }
 
 function requireTimestamp(value) {
-  if (!Number.isFinite(value)) invalidWebhookEvent()
+  if (!Number.isSafeInteger(value) || value < 0 || value > 8_640_000_000_000_000) invalidWebhookEvent()
+  return value
+}
+
+function requireKeyword(value) {
+  if (value === undefined) return ''
+  if (typeof value !== 'string') invalidWebhookEvent()
+  const normalized = value.trim()
+  if (/\r|\n/.test(normalized) || normalized.length > 100) invalidWebhookEvent()
+  return normalized ? `${normalized}\n` : ''
+}
+
+function requireTimezone(value) {
+  if (typeof value !== 'string' || !value || value.length > 100) invalidWebhookEvent()
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0)
+  } catch {
+    invalidWebhookEvent()
+  }
   return value
 }
 
@@ -196,11 +214,11 @@ function formatWebhookEvent(event, keyword) {
   if (!isObject(event)
     || typeof event.id !== 'string'
     || !event.id
-    || !Number.isFinite(event.occurredAt)
     || !isObject(event.payload)) {
     invalidWebhookEvent()
   }
-  const prefix = typeof keyword === 'string' && keyword.trim() ? `${keyword.trim()}\n` : ''
+  requireTimestamp(event.occurredAt)
+  const prefix = requireKeyword(keyword)
 
   if (event.type === 'task.due') {
     const task = requireTaskSnapshot(event.payload.task)
@@ -223,13 +241,15 @@ function formatWebhookEvent(event, keyword) {
 
   if (event.type === 'digest.daily') {
     const digest = event.payload.digest
-    if (!isObject(digest)
-      || !Number.isFinite(digest.periodStart)
-      || !Number.isFinite(digest.periodEnd)
-      || typeof digest.timezone !== 'string'
-      || !Number.isFinite(digest.activeCount)) {
+    if (!isObject(digest)) {
       invalidWebhookEvent()
     }
+    const periodStart = requireTimestamp(digest.periodStart)
+    const periodEnd = requireTimestamp(digest.periodEnd)
+    requireTimezone(digest.timezone)
+    if (periodStart > periodEnd
+      || !Number.isSafeInteger(digest.activeCount)
+      || digest.activeCount < 0) invalidWebhookEvent()
     const sections = [
       formatTitleList('完成', digest.completed),
       formatTitleList('到期', digest.due),
