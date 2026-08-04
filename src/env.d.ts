@@ -21,6 +21,11 @@ interface WindowServices {
 		saveCredentials(platform: WebhookPlatform, input: WebhookCredentialInput): Promise<WebhookTargetStatus>;
 		clearCredentials(platform: WebhookPlatform): Promise<void>;
 		testCredentials(platform: WebhookPlatform): Promise<WebhookTestResult>;
+		sendEvent(
+			platform: WebhookPlatform,
+			event: import('./types/webhook').WebhookDomainEvent,
+			keyword?: string,
+		): Promise<WebhookTestResult>;
 	};
 	fetchPageTitle(url: string): Promise<string>;
 	readFile(file: string): string;

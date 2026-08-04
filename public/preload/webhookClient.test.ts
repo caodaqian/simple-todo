@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { buildWebhookRequest, formatWebhookMessage, sendWebhook, validateWebhookUrl } from './webhookClient.js';
+import { buildWebhookRequest, formatWebhookEvent, formatWebhookMessage, sendWebhook, validateWebhookUrl } from './webhookClient.js';
 
 const publicLookup = vi.fn(async () => [{ address: '8.8.8.8', family: 4 }]);
 
@@ -353,5 +353,90 @@ describe('sendWebhook', () => {
 
 		expect(lookup).toHaveBeenCalledTimes(1);
 		expect(callback).toHaveBeenCalledWith(null, records);
+	});
+});
+
+describe('formatWebhookEvent', () => {
+	it('formats due and completed task events with an optional keyword', () => {
+		const due = formatWebhookEvent({
+			id: 'due-1',
+			type: 'task.due',
+			occurredAt: 2000,
+			payload: {
+				task: {
+					id: 'task-1', title: '提交报告', description: '', priority: 'high', tags: [], group: '', dueAt: 1000,
+				},
+				reminderAt: 500,
+			},
+		}, '  应用报警  ');
+		const completed = formatWebhookEvent({
+			id: 'completed-1',
+			type: 'task.completed',
+			occurredAt: 3000,
+			payload: {
+				task: {
+					id: 'task-1', title: '提交报告', description: '', priority: 'high', tags: [], group: '', completedAt: 3000,
+				},
+			},
+		});
+
+		expect(due).toEqual({
+			title: '任务提醒',
+			text: '应用报警\n任务：提交报告\n截止：1970-01-01T00:00:01.000Z\n状态：已逾期',
+		});
+		expect(completed).toEqual({
+			title: '任务完成',
+			text: '任务：提交报告\n完成：1970-01-01T00:00:03.000Z',
+		});
+	});
+
+	it('formats daily digest counts and limits each task list to ten titles', () => {
+		const tasks = Array.from({ length: 12 }, (_, index) => ({
+			id: `task-${index}`,
+			title: `任务 ${index}`,
+			description: '',
+			priority: 'low',
+			tags: [],
+			group: '',
+		}));
+		const formatted = formatWebhookEvent({
+			id: 'digest-1',
+			type: 'digest.daily',
+			occurredAt: 5000,
+			payload: {
+				digest: {
+					periodStart: 0,
+					periodEnd: 5000,
+					timezone: 'Asia/Shanghai',
+					completed: tasks,
+					overdue: tasks.slice(0, 2),
+					due: tasks.slice(0, 3),
+					activeCount: 7,
+				},
+			},
+		});
+
+		expect(formatted.title).toBe('简悦清单每日摘要');
+		expect(formatted.text).toContain('完成：12');
+		expect(formatted.text).toContain('到期：3');
+		expect(formatted.text).toContain('逾期：2');
+		expect(formatted.text).toContain('活跃：7');
+		expect(formatted.text).toContain('任务 9');
+		expect(formatted.text).not.toContain('任务 10');
+	});
+
+	it('rejects unknown event types and malformed payloads without echoing input', () => {
+		const invalid = { id: 'secret-id', type: 'task.due', occurredAt: 1, payload: { token: 'secret-token' } };
+		let error: unknown;
+		try {
+			formatWebhookEvent(invalid);
+		} catch (caught) {
+			error = caught;
+		}
+
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toBe('Webhook event is invalid.');
+		expect((error as Error).message).not.toContain('secret');
+		expect(() => formatWebhookEvent({ id: 'x', type: 'unknown', occurredAt: 1, payload: {} })).toThrow('Webhook event is invalid.');
 	});
 });

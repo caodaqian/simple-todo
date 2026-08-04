@@ -184,6 +184,12 @@ window.services = {
         text: '简悦清单机器人通知测试',
       })
     },
+    async sendEvent(platform, event, keyword) {
+      const credentials = webhookCredentialStore.read(platform)
+      if (!credentials) return { ok: false, errorCode: 'invalid_credentials' }
+      const message = webhookClient.formatWebhookEvent(event, keyword)
+      return webhookClient.sendWebhook(platform, credentials, message)
+    },
   },
 
   // 获取安全外部网页的 <title>，失败时返回空字符串

@@ -159,6 +159,89 @@ function formatWebhookMessage(input) {
   }
 }
 
+function invalidWebhookEvent() {
+  throw new Error('Webhook event is invalid.')
+}
+
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function requireTaskSnapshot(value) {
+  if (!isObject(value)
+    || typeof value.id !== 'string'
+    || typeof value.title !== 'string'
+    || typeof value.description !== 'string'
+    || !['low', 'medium', 'high', 'urgent'].includes(value.priority)
+    || !Array.isArray(value.tags)
+    || value.tags.some(function (tag) { return typeof tag !== 'string' })
+    || typeof value.group !== 'string') {
+    invalidWebhookEvent()
+  }
+  return value
+}
+
+function requireTimestamp(value) {
+  if (!Number.isFinite(value)) invalidWebhookEvent()
+  return value
+}
+
+function formatTitleList(label, tasks) {
+  if (!Array.isArray(tasks)) invalidWebhookEvent()
+  const titles = tasks.slice(0, 10).map(function (task) { return requireTaskSnapshot(task).title })
+  return `${label}：${tasks.length}${titles.length ? `\n${titles.map(function (title) { return `- ${title}` }).join('\n')}` : ''}`
+}
+
+function formatWebhookEvent(event, keyword) {
+  if (!isObject(event)
+    || typeof event.id !== 'string'
+    || !event.id
+    || !Number.isFinite(event.occurredAt)
+    || !isObject(event.payload)) {
+    invalidWebhookEvent()
+  }
+  const prefix = typeof keyword === 'string' && keyword.trim() ? `${keyword.trim()}\n` : ''
+
+  if (event.type === 'task.due') {
+    const task = requireTaskSnapshot(event.payload.task)
+    const dueAt = requireTimestamp(task.dueAt)
+    requireTimestamp(event.payload.reminderAt)
+    return formatWebhookMessage({
+      title: '任务提醒',
+      text: `${prefix}任务：${task.title}\n截止：${new Date(dueAt).toISOString()}\n状态：${dueAt < event.occurredAt ? '已逾期' : '待到期'}`,
+    })
+  }
+
+  if (event.type === 'task.completed') {
+    const task = requireTaskSnapshot(event.payload.task)
+    const completedAt = requireTimestamp(task.completedAt)
+    return formatWebhookMessage({
+      title: '任务完成',
+      text: `${prefix}任务：${task.title}\n完成：${new Date(completedAt).toISOString()}`,
+    })
+  }
+
+  if (event.type === 'digest.daily') {
+    const digest = event.payload.digest
+    if (!isObject(digest)
+      || !Number.isFinite(digest.periodStart)
+      || !Number.isFinite(digest.periodEnd)
+      || typeof digest.timezone !== 'string'
+      || !Number.isFinite(digest.activeCount)) {
+      invalidWebhookEvent()
+    }
+    const sections = [
+      formatTitleList('完成', digest.completed),
+      formatTitleList('到期', digest.due),
+      formatTitleList('逾期', digest.overdue),
+      `活跃：${digest.activeCount}`,
+    ]
+    return formatWebhookMessage({ title: '简悦清单每日摘要', text: `${prefix}${sections.join('\n')}` })
+  }
+
+  invalidWebhookEvent()
+}
+
 function buildWebhookRequest(platform, credentials, message, now) {
   assertPlatform(platform)
   const formatted = formatWebhookMessage(message)
@@ -325,4 +408,4 @@ async function sendWebhook(platform, credentials, message, deps) {
   })
 }
 
-module.exports = { buildWebhookRequest, formatWebhookMessage, sendWebhook, validateWebhookUrl }
+module.exports = { buildWebhookRequest, formatWebhookEvent, formatWebhookMessage, sendWebhook, validateWebhookUrl }

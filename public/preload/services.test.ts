@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import plugin from '../plugin.json';
 
 const require = createRequire(import.meta.url);
-const webhookClient = require('./webhookClient.js') as { sendWebhook: typeof vi.fn };
+const webhookClient = require('./webhookClient.js') as { sendWebhook: typeof vi.fn; formatWebhookEvent: typeof vi.fn };
 
 describe('MCP tool registration', () => {
 	beforeEach(() => {
@@ -22,8 +22,42 @@ describe('MCP tool registration', () => {
 	it('exposes only the narrow webhook credential API to the renderer', async () => {
 		await import('./services.js');
 
-		expect(Object.keys(window.services.webhooks).sort()).toEqual(['clearCredentials', 'getStatuses', 'saveCredentials', 'testCredentials']);
+		expect(Object.keys(window.services.webhooks).sort()).toEqual(['clearCredentials', 'getStatuses', 'saveCredentials', 'sendEvent', 'testCredentials']);
 		expect(window.services.webhooks).not.toHaveProperty('read');
+		expect(window.services.webhooks).not.toHaveProperty('sendWebhook');
+		expect(window.services.webhooks).not.toHaveProperty('send');
+	});
+
+	it('returns invalid_credentials when sending an event to an unconfigured target', async () => {
+		const sendWebhookMock = vi.spyOn(webhookClient, 'sendWebhook');
+		await import('./services.js');
+
+		const result = await window.services.webhooks.sendEvent('feishu', {
+			id: 'due-1', type: 'task.due', occurredAt: 1, payload: { task: { id: '1', title: '任务' }, reminderAt: 1 },
+		});
+
+		expect(result).toEqual({ ok: false, errorCode: 'invalid_credentials' });
+		expect(sendWebhookMock).not.toHaveBeenCalled();
+	});
+
+	it('formats and sends only a structured stored-credential event', async () => {
+		const credentials = { url: 'https://open.feishu.cn/open-apis/bot/v2/hook/token' };
+		const event = {
+			id: 'completed-1',
+			type: 'task.completed' as const,
+			occurredAt: 3,
+			payload: { task: { id: '1', title: '完成任务', description: '', priority: 'low', tags: [], group: '', completedAt: 3 } },
+		};
+		window.utools!.dbCryptoStorage!.getItem = vi.fn(() => credentials);
+		const formatMock = vi.spyOn(webhookClient, 'formatWebhookEvent').mockReturnValue({ title: '任务完成', text: '关键词\n任务：完成任务' });
+		const sendMock = vi.spyOn(webhookClient, 'sendWebhook').mockResolvedValue({ ok: true, status: 200 });
+		await import('./services.js');
+
+		const result = await window.services.webhooks.sendEvent('feishu', event, '关键词');
+
+		expect(result).toEqual({ ok: true, status: 200 });
+		expect(formatMock).toHaveBeenCalledWith(event, '关键词');
+		expect(sendMock).toHaveBeenCalledWith('feishu', credentials, { title: '任务完成', text: '关键词\n任务：完成任务' });
 		expect(window.services.webhooks).not.toHaveProperty('sendWebhook');
 		expect(window.services.webhooks).not.toHaveProperty('send');
 	});
