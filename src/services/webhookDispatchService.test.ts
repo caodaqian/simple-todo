@@ -140,6 +140,7 @@ describe('webhookDispatchService', () => {
 			clock: () => 4_000,
 			sendEvent: vi.fn(),
 			getKeyword: vi.fn(),
+			eventIdFactory: () => 'completion-a',
 		});
 		const task = makeTask({ status: 'done', completedAt: 3_000 });
 
@@ -148,7 +149,7 @@ describe('webhookDispatchService', () => {
 		task.tags.push('新标签');
 
 		expect(event).toEqual({
-			id: 'task.completed:task-1:3000',
+			id: 'task.completed:task-1:3000:completion-a',
 			type: 'task.completed',
 			occurredAt: 4_000,
 			payload: {
@@ -158,6 +159,9 @@ describe('webhookDispatchService', () => {
 			},
 		});
 		expect(() => service.createCompletedEvent(makeTask({ status: 'done' }))).toThrow(
+			'Cannot create a completed webhook event without a completion timestamp.',
+		);
+		expect(() => service.createCompletedEvent(makeTask({ completedAt: 3_000 }))).toThrow(
 			'Cannot create a completed webhook event without a completion timestamp.',
 		);
 	});

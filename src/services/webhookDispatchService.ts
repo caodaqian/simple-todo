@@ -26,6 +26,7 @@ interface WebhookDispatchDependencies {
 	) => Promise<WebhookSendResult>;
 	getKeyword?: (platform: WebhookPlatform) => string | undefined;
 	clock?: () => number;
+	eventIdFactory?: () => string;
 }
 
 export interface WebhookDrainResult {
@@ -66,6 +67,7 @@ export const createWebhookDispatchService = (
 	const sendEvent = deps.sendEvent ?? defaultSendEvent;
 	const getKeyword = deps.getKeyword ?? defaultGetKeyword;
 	const clock = deps.clock ?? Date.now;
+	const eventIdFactory = deps.eventIdFactory ?? (() => globalThis.crypto.randomUUID());
 	let drainInFlight: Promise<WebhookDrainResult> | null = null;
 
 	const createDueEvent = (
@@ -100,11 +102,11 @@ export const createWebhookDispatchService = (
 		task: Task,
 		occurredAt = clock(),
 	): CompletedWebhookEvent => {
-		if (task.completedAt === undefined) {
+		if (task.status !== 'done' || task.completedAt === undefined) {
 			throw new Error('Cannot create a completed webhook event without a completion timestamp.');
 		}
 		return {
-			id: `task.completed:${task.id}:${task.completedAt}`,
+			id: `task.completed:${task.id}:${task.completedAt}:${eventIdFactory()}`,
 			type: 'task.completed',
 			occurredAt,
 			payload: {
