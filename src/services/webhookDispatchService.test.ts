@@ -134,6 +134,34 @@ describe('webhookDispatchService', () => {
 		);
 	});
 
+	it('creates a detached completed event keyed by the completion timestamp', () => {
+		const service = createWebhookDispatchService({
+			outbox: createOutboxMock(),
+			clock: () => 4_000,
+			sendEvent: vi.fn(),
+			getKeyword: vi.fn(),
+		});
+		const task = makeTask({ status: 'done', completedAt: 3_000 });
+
+		const event = service.createCompletedEvent(task);
+		task.title = '已修改';
+		task.tags.push('新标签');
+
+		expect(event).toEqual({
+			id: 'task.completed:task-1:3000',
+			type: 'task.completed',
+			occurredAt: 4_000,
+			payload: {
+				task: {
+					id: 'task-1', title: '提交报告', description: '说明', priority: 'high', tags: ['工作'], group: '项目 A', completedAt: 3_000,
+				},
+			},
+		});
+		expect(() => service.createCompletedEvent(makeTask({ status: 'done' }))).toThrow(
+			'Cannot create a completed webhook event without a completion timestamp.',
+		);
+	});
+
 	it('delegates enqueue without duplicating outbox behavior', () => {
 		const outbox = createOutboxMock();
 		const event = makeDueEvent();

@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS } from '../types/settings';
 import type { Task } from '../types/task';
 import { settingsService } from './settingsService';
 import { taskService } from './taskService';
+import { webhookDispatchService } from './webhookDispatchService';
 import { taskWorkflowService } from './taskWorkflowService';
 
 class MockDbStorage {
@@ -44,6 +45,7 @@ describe('taskWorkflowService', () => {
 	const showNotification = vi.fn();
 
 	beforeEach(() => {
+		vi.restoreAllMocks();
 		dbStorage.clear();
 		showNotification.mockReset();
 		window.utools = {
@@ -52,6 +54,47 @@ describe('taskWorkflowService', () => {
 			showNotification,
 		} as typeof window.utools;
 		settingsService.saveSettings({ ...DEFAULT_SETTINGS, notifyEnabled: true });
+		vi.spyOn(webhookDispatchService, 'enqueue').mockReturnValue([]);
+		vi.spyOn(webhookDispatchService, 'drain').mockResolvedValue({ claimed: 0, succeeded: 0, failed: 0, skipped: 0 });
+	});
+
+	it('enqueues a completed event once for enabled subscribed targets', async () => {
+		settingsService.saveSettings({
+			...DEFAULT_SETTINGS,
+			webhooks: {
+				feishu: { enabled: true, events: ['task.completed'] },
+				dingtalk: { enabled: true, events: ['task.due'] },
+				dailyDigest: { enabled: false, time: '09:00', timezone: 'Asia/Shanghai' },
+			},
+		});
+		taskService.replaceAll([makeTask({ id: 't1', title: '提交版本', status: 'doing' })]);
+		const createEvent = vi.spyOn(webhookDispatchService, 'createCompletedEvent');
+
+		taskWorkflowService.changeStatus('t1', 'done');
+		await Promise.resolve();
+
+		expect(createEvent).toHaveBeenCalledOnce();
+		expect(webhookDispatchService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ type: 'task.completed' }), ['feishu']);
+		expect(webhookDispatchService.drain).toHaveBeenCalledOnce();
+	});
+
+	it('does not enqueue repeated completion but enqueues again after reopening', async () => {
+		settingsService.saveSettings({
+			...DEFAULT_SETTINGS,
+			webhooks: {
+				feishu: { enabled: true, events: ['task.completed'] },
+				dingtalk: { enabled: false, events: [] },
+				dailyDigest: { enabled: false, time: '09:00', timezone: 'Asia/Shanghai' },
+			},
+		});
+		taskService.replaceAll([makeTask({ id: 't1', status: 'done', completedAt: 1 })]);
+
+		taskWorkflowService.changeStatus('t1', 'done');
+		taskWorkflowService.changeStatus('t1', 'todo');
+		taskWorkflowService.changeStatus('t1', 'done');
+		await Promise.resolve();
+
+		expect(webhookDispatchService.enqueue).toHaveBeenCalledTimes(1);
 	});
 
 	it('notifies when task changes from active status to done', () => {

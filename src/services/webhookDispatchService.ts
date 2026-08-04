@@ -9,6 +9,7 @@ import type {
 } from '../types/webhook';
 
 type DueWebhookEvent = Extract<WebhookDomainEvent, { type: 'task.due' }>;
+type CompletedWebhookEvent = Extract<WebhookDomainEvent, { type: 'task.completed' }>;
 
 interface WebhookSendResult {
 	ok: boolean;
@@ -36,6 +37,7 @@ export interface WebhookDrainResult {
 
 export interface WebhookDispatchService {
 	createDueEvent(task: Task, reminderAt: number, occurredAt?: number): DueWebhookEvent;
+	createCompletedEvent(task: Task, occurredAt?: number): CompletedWebhookEvent;
 	enqueue(event: WebhookDomainEvent, platforms: WebhookPlatform[]): WebhookDeliveryRecord[];
 	drain(now?: number): Promise<WebhookDrainResult>;
 }
@@ -94,6 +96,31 @@ export const createWebhookDispatchService = (
 		};
 	};
 
+	const createCompletedEvent = (
+		task: Task,
+		occurredAt = clock(),
+	): CompletedWebhookEvent => {
+		if (task.completedAt === undefined) {
+			throw new Error('Cannot create a completed webhook event without a completion timestamp.');
+		}
+		return {
+			id: `task.completed:${task.id}:${task.completedAt}`,
+			type: 'task.completed',
+			occurredAt,
+			payload: {
+				task: {
+					id: task.id,
+					title: task.title,
+					description: task.description,
+					priority: task.priority,
+					tags: [...task.tags],
+					group: task.group,
+					completedAt: task.completedAt,
+				},
+			},
+		};
+	};
+
 	const runDrain = async (now: number): Promise<WebhookDrainResult> => {
 		const result = emptyDrainResult();
 		for (const ready of outbox.listReady(now)) {
@@ -139,6 +166,7 @@ export const createWebhookDispatchService = (
 
 	return {
 		createDueEvent,
+		createCompletedEvent,
 		enqueue: (event, platforms) => outbox.enqueue(event, platforms),
 		drain: (now = clock()) => {
 			if (drainInFlight !== null) return drainInFlight;
