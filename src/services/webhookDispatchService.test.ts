@@ -6,8 +6,8 @@ import type {
 	WebhookErrorCode,
 	WebhookPlatform,
 } from '../types/webhook';
-import type { WebhookOutboxService } from './webhookOutboxService';
 import { createWebhookDispatchService } from './webhookDispatchService';
+import type { WebhookOutboxService } from './webhookOutboxService';
 
 type TaskOverrides = Partial<Omit<Task, 'dueDate' | 'dueStart' | 'dueEnd'>> & {
 	dueDate?: number | undefined;

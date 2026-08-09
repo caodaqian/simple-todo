@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { settingsService } from '../services/settingsService';
 import { taskService } from '../services/taskService';
-  import type {
+import type {
     AccentColor,
     AppSettings,
     AppearanceMode,
@@ -12,14 +12,14 @@ import { taskService } from '../services/taskService';
     StickyWindowPositionPreset,
     StickyWindowWidthPreset,
     TodoView,
-  } from '../types/settings';
+} from '../types/settings';
 import { ACCENT_COLORS } from '../types/settings';
 import type {
-  DailyDigestSettings,
-  WebhookEventType,
-  WebhookPlatform,
-  WebhookTargetSettings,
-  WebhookTargetStatus,
+    DailyDigestSettings,
+    WebhookEventType,
+    WebhookPlatform,
+    WebhookTargetSettings,
+    WebhookTargetStatus,
 } from '../types/webhook';
 import AppIcon from './AppIcon.vue';
 
@@ -657,7 +657,7 @@ type="button"
   }
 
 
- 
+
 .segmented-group {
   display: flex;
   gap: var(--space-1);
@@ -738,7 +738,7 @@ type="button"
   }
 
 
- 
+
 .switch-field {
   flex-direction: row;
   align-items: center;

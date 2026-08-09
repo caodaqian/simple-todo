@@ -1,9 +1,9 @@
 import type { Task, TaskStatus } from '../types/task';
+import type { WebhookPlatform } from '../types/webhook';
 import { notifyService } from './notifyService';
 import { settingsService } from './settingsService';
 import { taskService } from './taskService';
 import { webhookDispatchService } from './webhookDispatchService';
-import type { WebhookPlatform } from '../types/webhook';
 
 export interface BlockedCompletionInfo {
 	parent: Task;

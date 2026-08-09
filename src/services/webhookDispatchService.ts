@@ -1,13 +1,13 @@
-import { settingsService } from './settingsService';
-import { webhookOutboxService, type WebhookOutboxService } from './webhookOutboxService';
 import { getTaskDeadline, type Task } from '../types/task';
 import type {
 	WebhookDeliveryRecord,
+	WebhookDigestSnapshot,
 	WebhookDomainEvent,
 	WebhookErrorCode,
-	WebhookDigestSnapshot,
 	WebhookPlatform,
 } from '../types/webhook';
+import { settingsService } from './settingsService';
+import { webhookOutboxService, type WebhookOutboxService } from './webhookOutboxService';
 
 type DueWebhookEvent = Extract<WebhookDomainEvent, { type: 'task.due' }>;
 type CompletedWebhookEvent = Extract<WebhookDomainEvent, { type: 'task.completed' }>;

@@ -1,11 +1,11 @@
 import { onUnmounted } from 'vue';
+import { buildDailyDigest, isDailyDigestDue } from '../services/dailyDigestService';
 import { notifyService } from '../services/notifyService';
 import {
 	computeReminderAt,
 	getDueReminders,
 	getMissedReminders,
 } from '../services/reminderService';
-import { buildDailyDigest, isDailyDigestDue } from '../services/dailyDigestService';
 import { settingsService } from '../services/settingsService';
 import { taskService } from '../services/taskService';
 import { webhookDispatchService } from '../services/webhookDispatchService';

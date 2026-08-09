@@ -1,3 +1,10 @@
+import type {
+	WebhookDeliveryRecord,
+	WebhookDomainEvent,
+	WebhookErrorCode,
+	WebhookEventEnvelope,
+	WebhookPlatform,
+} from '../types/webhook';
 import {
 	createDocumentStore,
 	type DocumentRecord,
@@ -5,13 +12,6 @@ import {
 	type DocumentWriteResult,
 } from './documentStore';
 import { STORAGE_KEYS } from './storageKeys';
-import type {
-	WebhookDeliveryRecord,
-	WebhookDomainEvent,
-	WebhookEventEnvelope,
-	WebhookErrorCode,
-	WebhookPlatform,
-} from '../types/webhook';
 
 type WebhookEventDocumentData = WebhookDomainEvent | WebhookEventEnvelope;
 

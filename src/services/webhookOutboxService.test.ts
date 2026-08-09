@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import type { WebhookDeliveryRecord, WebhookDomainEvent, WebhookEventEnvelope } from '../types/webhook';
 import type { DocumentRecord, DocumentReference, DocumentStore, DocumentWriteResult } from './documentStore';
 import { STORAGE_KEYS } from './storageKeys';
 import { createWebhookOutboxService } from './webhookOutboxService';
-import type { WebhookDeliveryRecord, WebhookDomainEvent, WebhookEventEnvelope } from '../types/webhook';
 
 type StoredWebhookEvent = WebhookDomainEvent | WebhookEventEnvelope;
 

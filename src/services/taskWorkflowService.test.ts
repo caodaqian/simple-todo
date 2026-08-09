@@ -3,8 +3,8 @@ import { DEFAULT_SETTINGS } from '../types/settings';
 import type { Task } from '../types/task';
 import { settingsService } from './settingsService';
 import { taskService } from './taskService';
-import { webhookDispatchService } from './webhookDispatchService';
 import { taskWorkflowService } from './taskWorkflowService';
+import { webhookDispatchService } from './webhookDispatchService';
 
 class MockDbStorage {
 	private store = new Map<string, string>();
