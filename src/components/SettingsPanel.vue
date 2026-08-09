@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue';
 import { settingsService } from '../services/settingsService';
 import { taskService } from '../services/taskService';
   import type {
@@ -13,6 +14,13 @@ import { taskService } from '../services/taskService';
     TodoView,
   } from '../types/settings';
 import { ACCENT_COLORS } from '../types/settings';
+import type {
+  DailyDigestSettings,
+  WebhookEventType,
+  WebhookPlatform,
+  WebhookTargetSettings,
+  WebhookTargetStatus,
+} from '../types/webhook';
 import AppIcon from './AppIcon.vue';
 
 interface Props {
@@ -40,6 +48,42 @@ const viewOptions: Array<{ label: string; value: TodoView }> = [
   { label: '四象限', value: 'eisenhower' },
   { label: '日历', value: 'calendar' },
 ];
+
+const webhookPlatforms: Array<{ value: WebhookPlatform; label: string }> = [
+  { value: 'feishu', label: '飞书机器人' },
+  { value: 'dingtalk', label: '钉钉机器人' },
+];
+
+const webhookEvents: Array<{ value: WebhookEventType; label: string }> = [
+  { value: 'task.due', label: '任务到期' },
+  { value: 'task.completed', label: '任务完成' },
+  { value: 'digest.daily', label: '每日摘要' },
+];
+
+const credentialDrafts = ref<Record<WebhookPlatform, { url: string; secret: string }>>({
+  feishu: { url: '', secret: '' },
+  dingtalk: { url: '', secret: '' },
+});
+
+const webhookStatuses = ref<Record<WebhookPlatform, WebhookTargetStatus | undefined>>({
+  feishu: undefined,
+  dingtalk: undefined,
+});
+
+const webhookFeedback = ref<Record<WebhookPlatform, string>>({
+  feishu: '',
+  dingtalk: '',
+});
+
+const refreshWebhookStatuses = async (): Promise<void> => {
+  if (!window.services?.webhooks) return;
+  const statuses = await window.services.webhooks.getStatuses();
+  for (const status of statuses) {
+    webhookStatuses.value[status.platform] = status;
+  }
+};
+
+void refreshWebhookStatuses();
 
   const fontScaleOptions: Array<{ label: string; value: FontScale; description: string }> = [
     { label: '紧凑', value: 'compact', description: '显示更多任务' },
@@ -129,6 +173,76 @@ const handleShowCompletedChange = (event: Event): void => {
 
 const handleNotificationsChange = (event: Event): void => {
   const next = settingsService.updateSettings({ notifyEnabled: (event.target as HTMLInputElement).checked });
+  emit('change', next);
+};
+
+const updateWebhookSettings = (platform: WebhookPlatform, patch: Partial<WebhookTargetSettings>): void => {
+  const current = settingsService.getSettings().webhooks;
+  const next = settingsService.updateSettings({
+    webhooks: {
+      ...current,
+      [platform]: { ...current[platform], ...patch },
+    },
+  });
+  emit('change', next);
+};
+
+const toggleWebhookEvent = (platform: WebhookPlatform, eventType: WebhookEventType, checked: boolean): void => {
+  const current = settingsService.getSettings().webhooks[platform].events;
+  const events = checked
+    ? [...new Set([...current, eventType])]
+    : current.filter((event) => event !== eventType);
+  updateWebhookSettings(platform, { events });
+};
+
+const setWebhookKeyword = (platform: WebhookPlatform, value: string): void => {
+  const current = settingsService.getSettings().webhooks[platform];
+  const keyword = value.trim();
+  const nextTarget: WebhookTargetSettings = {
+    enabled: current.enabled,
+    events: [...current.events],
+    ...(keyword ? { keyword } : {}),
+  };
+  updateWebhookSettings(platform, nextTarget);
+};
+
+const saveWebhookCredentials = async (platform: WebhookPlatform): Promise<void> => {
+  if (!window.services?.webhooks) return;
+  const draft = credentialDrafts.value[platform];
+
+  try {
+    webhookStatuses.value[platform] = await window.services.webhooks.saveCredentials(platform, {
+      url: draft.url,
+      ...(draft.secret.trim() ? { secret: draft.secret } : {}),
+    });
+    credentialDrafts.value[platform] = { url: '', secret: '' };
+    webhookFeedback.value[platform] = '已安全保存凭据';
+  } catch {
+    webhookFeedback.value[platform] = '保存失败，请检查地址与签名密钥';
+  }
+};
+
+const testWebhook = async (platform: WebhookPlatform): Promise<void> => {
+  if (!window.services?.webhooks) return;
+  const result = await window.services.webhooks.testCredentials(platform);
+  webhookFeedback.value[platform] = result.ok ? '测试消息已发送' : '测试失败，请检查机器人配置';
+};
+
+const clearWebhookCredentials = async (platform: WebhookPlatform): Promise<void> => {
+  if (!window.services?.webhooks) return;
+  await window.services.webhooks.clearCredentials(platform);
+  webhookStatuses.value[platform] = { platform, configured: false };
+  webhookFeedback.value[platform] = '已清除凭据';
+};
+
+const updateDailyDigest = (patch: Partial<DailyDigestSettings>): void => {
+  const current = settingsService.getSettings().webhooks;
+  const next = settingsService.updateSettings({
+    webhooks: {
+      ...current,
+      dailyDigest: { ...current.dailyDigest, ...patch },
+    },
+  });
   emit('change', next);
 };
 
@@ -343,6 +457,98 @@ type="button"
           <span class="field-label">番茄钟时长（分钟）</span>
           <input type="number" min="1" max="240" step="1" :value="settings.pomodoroMinutes"
             @change="handlePomodoroMinutesChange" />
+        </label>
+      </div>
+
+      <div class="section-divider"></div>
+
+      <!-- 机器人通知 -->
+      <div class="section">
+        <h3 class="section-title">机器人通知</h3>
+
+        <div v-for="platform in webhookPlatforms" :key="platform.value" class="field webhook-target">
+          <div class="webhook-target__header">
+            <strong>{{ platform.label }}</strong>
+            <span class="field-hint">
+              {{ webhookStatuses[platform.value]?.configured
+                ? webhookStatuses[platform.value]?.endpointLabel ?? '已配置'
+                : '未配置' }}
+            </span>
+          </div>
+
+          <label class="switch-field">
+            <input
+              type="checkbox"
+              :checked="settings.webhooks?.[platform.value]?.enabled"
+              @change="updateWebhookSettings(platform.value, { enabled: ($event.target as HTMLInputElement).checked })"
+            />
+            <span>启用此目标</span>
+          </label>
+
+          <div class="webhook-events">
+            <label v-for="event in webhookEvents" :key="event.value">
+              <input
+                type="checkbox"
+                :checked="settings.webhooks?.[platform.value]?.events.includes(event.value)"
+                @change="toggleWebhookEvent(platform.value, event.value, ($event.target as HTMLInputElement).checked)"
+              />
+              {{ event.label }}
+            </label>
+          </div>
+
+          <input
+            v-model="credentialDrafts[platform.value].url"
+            type="url"
+            placeholder="Webhook URL"
+            autocomplete="off"
+          />
+          <input
+            v-model="credentialDrafts[platform.value].secret"
+            type="password"
+            placeholder="签名密钥（可选）"
+            autocomplete="new-password"
+          />
+          <input
+            :value="settings.webhooks?.[platform.value]?.keyword ?? ''"
+            placeholder="消息关键词（可选）"
+            @change="setWebhookKeyword(platform.value, ($event.target as HTMLInputElement).value)"
+          />
+
+          <div class="data-actions">
+            <button type="button" class="btn-ghost" @click="saveWebhookCredentials(platform.value)">保存凭据</button>
+            <button type="button" class="btn-ghost" @click="testWebhook(platform.value)">发送测试</button>
+            <button type="button" class="btn-ghost" @click="clearWebhookCredentials(platform.value)">清除凭据</button>
+          </div>
+
+          <span v-if="webhookFeedback[platform.value]" class="field-hint">
+            {{ webhookFeedback[platform.value] }}
+          </span>
+        </div>
+
+        <label class="field switch-field">
+          <input
+            type="checkbox"
+            :checked="settings.webhooks?.dailyDigest.enabled"
+            @change="updateDailyDigest({ enabled: ($event.target as HTMLInputElement).checked })"
+          />
+          <span>启用每日摘要</span>
+        </label>
+
+        <label class="field">
+          <span class="field-label">每日摘要时间</span>
+          <input
+            type="time"
+            :value="settings.webhooks?.dailyDigest.time"
+            @change="updateDailyDigest({ time: ($event.target as HTMLInputElement).value })"
+          />
+        </label>
+
+        <label class="field">
+          <span class="field-label">时区</span>
+          <input
+            :value="settings.webhooks?.dailyDigest.timezone"
+            @change="updateDailyDigest({ timezone: ($event.target as HTMLInputElement).value.trim() })"
+          />
         </label>
       </div>
 
