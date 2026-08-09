@@ -5,6 +5,7 @@ import {
 	getDueReminders,
 	getMissedReminders,
 } from '../services/reminderService';
+import { buildDailyDigest, isDailyDigestDue } from '../services/dailyDigestService';
 import { settingsService } from '../services/settingsService';
 import { taskService } from '../services/taskService';
 import { webhookDispatchService } from '../services/webhookDispatchService';
@@ -25,6 +26,11 @@ const getDueWebhookPlatforms = (): WebhookPlatform[] => {
 	});
 };
 
+const getWebhookPlatforms = (eventType: 'task.due' | 'digest.daily'): WebhookPlatform[] => {
+	const settings = settingsService.getSettings().webhooks;
+	return WEBHOOK_PLATFORMS.filter((platform) => settings[platform].enabled && settings[platform].events.includes(eventType));
+};
+
 const enqueueDueWebhookEvents = (tasks: Task[]): void => {
 	const platforms = getDueWebhookPlatforms();
 	if (platforms.length === 0) return;
@@ -37,6 +43,19 @@ const enqueueDueWebhookEvents = (tasks: Task[]): void => {
 		} catch {
 			console.debug('Unable to enqueue webhook reminder');
 		}
+	}
+};
+
+const enqueueDailyDigest = (tasks: Task[]): void => {
+	const settings = settingsService.getSettings().webhooks;
+	const digestSettings = settings.dailyDigest;
+	const platforms = getWebhookPlatforms('digest.daily');
+	if (!digestSettings.enabled || platforms.length === 0 || !isDailyDigestDue(Date.now(), digestSettings.time, digestSettings.timezone)) return;
+	try {
+		const event = webhookDispatchService.createDailyDigestEvent(buildDailyDigest(tasks, Date.now(), digestSettings.timezone));
+		if (!webhookDispatchService.hasEvent(event.id)) webhookDispatchService.enqueue(event, platforms);
+	} catch {
+		console.debug('Unable to enqueue daily webhook digest');
 	}
 };
 
@@ -65,6 +84,7 @@ const markReminded = (tasks: Task[]): void => {
 const startRealtimePolling = (): (() => void) => {
 	const tick = (): void => {
 		const tasks = taskService.getAll();
+		enqueueDailyDigest(tasks);
 		const due = getDueReminders(tasks);
 		if (due.length > 0) {
 			enqueueDueWebhookEvents(due);
@@ -86,6 +106,7 @@ const startRealtimePolling = (): (() => void) => {
  */
 export const catchUpReminders = (): void => {
 	const tasks = taskService.getAll();
+	enqueueDailyDigest(tasks);
 	const missed = getMissedReminders(tasks);
 	if (missed.length > 0) {
 		enqueueDueWebhookEvents(missed);

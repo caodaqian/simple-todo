@@ -55,6 +55,7 @@ describe('useReminderScheduler webhook integration', () => {
 			},
 		}));
 		vi.spyOn(webhookDispatchService, 'enqueue').mockReturnValue([]);
+		vi.spyOn(webhookDispatchService, 'hasEvent').mockReturnValue(false);
 		vi.spyOn(webhookDispatchService, 'drain').mockResolvedValue({ claimed: 0, succeeded: 0, failed: 0, skipped: 0 });
 	});
 
@@ -112,5 +113,26 @@ describe('useReminderScheduler webhook integration', () => {
 
 		expect(notifyService.notify).toHaveBeenCalledWith('简悦清单提醒', task.title);
 		expect(taskService.update).toHaveBeenCalledWith(task.id, { remindedAt: 2_000 });
+	});
+
+	it('enqueues the due daily digest once for enabled subscribed targets', async () => {
+		vi.spyOn(taskService, 'getAll').mockReturnValue([]);
+		settingsService.saveSettings({
+			...webhookSettings(true, false),
+			webhooks: {
+				...webhookSettings(true, false).webhooks,
+				feishu: { enabled: true, events: ['digest.daily'] },
+				dailyDigest: { enabled: true, time: '08:00', timezone: 'Asia/Shanghai' },
+			},
+		});
+		vi.spyOn(webhookDispatchService, 'createDailyDigestEvent').mockReturnValue({
+			id: 'digest.daily:Asia/Shanghai:1970-01-01', type: 'digest.daily', occurredAt: 2_000,
+			payload: { digest: { periodStart: 0, periodEnd: 1, timezone: 'Asia/Shanghai', completed: [], due: [], overdue: [], activeCount: 0 } },
+		});
+
+		catchUpReminders();
+		await Promise.resolve();
+
+		expect(webhookDispatchService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ type: 'digest.daily' }), ['feishu']);
 	});
 });

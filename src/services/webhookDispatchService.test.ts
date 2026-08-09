@@ -166,6 +166,30 @@ describe('webhookDispatchService', () => {
 		);
 	});
 
+	it('creates a daily digest event with a stable schedule identity', () => {
+		const service = createWebhookDispatchService({
+			outbox: createOutboxMock(),
+			clock: () => 4_000,
+			sendEvent: vi.fn(),
+			getKeyword: vi.fn(),
+		});
+
+		expect(service.createDailyDigestEvent({
+			dateKey: '2026-08-09',
+			periodStart: 1_000,
+			periodEnd: 2_000,
+			timezone: 'Asia/Shanghai',
+			completed: [],
+			due: [],
+			overdue: [],
+			activeCount: 3,
+		})).toEqual(expect.objectContaining({
+			id: 'digest.daily:Asia/Shanghai:2026-08-09',
+			type: 'digest.daily',
+			occurredAt: 4_000,
+		}));
+	});
+
 	it('delegates enqueue without duplicating outbox behavior', () => {
 		const outbox = createOutboxMock();
 		const event = makeDueEvent();

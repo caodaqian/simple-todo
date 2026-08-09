@@ -5,11 +5,14 @@ import type {
 	WebhookDeliveryRecord,
 	WebhookDomainEvent,
 	WebhookErrorCode,
+	WebhookDigestSnapshot,
 	WebhookPlatform,
 } from '../types/webhook';
 
 type DueWebhookEvent = Extract<WebhookDomainEvent, { type: 'task.due' }>;
 type CompletedWebhookEvent = Extract<WebhookDomainEvent, { type: 'task.completed' }>;
+type DailyDigestWebhookEvent = Extract<WebhookDomainEvent, { type: 'digest.daily' }>;
+type DailyDigestInput = WebhookDigestSnapshot & { dateKey: string };
 
 interface WebhookSendResult {
 	ok: boolean;
@@ -39,6 +42,8 @@ export interface WebhookDrainResult {
 export interface WebhookDispatchService {
 	createDueEvent(task: Task, reminderAt: number, occurredAt?: number): DueWebhookEvent;
 	createCompletedEvent(task: Task, occurredAt?: number): CompletedWebhookEvent;
+	createDailyDigestEvent(digest: DailyDigestInput, occurredAt?: number): DailyDigestWebhookEvent;
+	hasEvent(eventId: string): boolean;
 	enqueue(event: WebhookDomainEvent, platforms: WebhookPlatform[]): WebhookDeliveryRecord[];
 	drain(now?: number): Promise<WebhookDrainResult>;
 }
@@ -123,6 +128,26 @@ export const createWebhookDispatchService = (
 		};
 	};
 
+	const createDailyDigestEvent = (
+		digest: DailyDigestInput,
+		occurredAt = clock(),
+	): DailyDigestWebhookEvent => ({
+		id: `digest.daily:${digest.timezone}:${digest.dateKey}`,
+		type: 'digest.daily',
+		occurredAt,
+		payload: {
+			digest: {
+				periodStart: digest.periodStart,
+				periodEnd: digest.periodEnd,
+				timezone: digest.timezone,
+				completed: digest.completed.map((task) => ({ ...task, tags: [...task.tags] })),
+				due: digest.due.map((task) => ({ ...task, tags: [...task.tags] })),
+				overdue: digest.overdue.map((task) => ({ ...task, tags: [...task.tags] })),
+				activeCount: digest.activeCount,
+			},
+		},
+	});
+
 	const runDrain = async (now: number): Promise<WebhookDrainResult> => {
 		const result = emptyDrainResult();
 		for (const ready of outbox.listReady(now)) {
@@ -169,6 +194,8 @@ export const createWebhookDispatchService = (
 	return {
 		createDueEvent,
 		createCompletedEvent,
+		createDailyDigestEvent,
+		hasEvent: (eventId) => outbox.getEvent(eventId) !== null,
 		enqueue: (event, platforms) => outbox.enqueue(event, platforms),
 		drain: (now = clock()) => {
 			if (drainInFlight !== null) return drainInFlight;
