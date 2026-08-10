@@ -23,7 +23,7 @@
 	],
 	"tools": {
 		"todo_create_task": {
-			"description": "创建一项待办；仅 title 必填，其余字段可省略或传 null（等同省略）。默认状态为 todo、优先级为 medium；子任务也作为任务创建，使用 parent_task_id 关联父任务。",
+			"description": "创建一项待办；仅 title 必填。priority 省略时默认 medium；其他可选字段可省略。子任务也作为任务创建，使用 parent_task_id 关联父任务。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -33,83 +33,53 @@
 						"description": "必填。非空任务标题。"
 					},
 					"priority": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"enum": [
 							"low",
 							"medium",
 							"high",
 							"urgent"
 						],
-						"description": "可选。任务优先级，默认 medium。"
+						"description": "可选。任务优先级；省略时默认 medium。"
 					},
 					"parent_task_id": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。已存在父任务的 ID；传 null 等同省略。"
+						"type": "string",
+						"description": "可选。已存在父任务的 ID；省略时不处理。"
 					},
 					"due_start": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。时间段开始；all_day=true 时使用 YYYY-MM-DD，否则使用 ISO 8601；传 null 等同省略。单点任务可只传 due_end；若与 due_end 同时存在会按时间升序自动归一化为 [due_start, due_end]。"
+						"type": "string",
+						"description": "可选。时间段开始；all_day=true 时使用 YYYY-MM-DD，否则使用 ISO 8601；省略时不处理。单点任务可只传 due_end；若与 due_end 同时存在会按时间升序自动归一化为 [due_start, due_end]。"
 					},
 					"due_end": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。截止/时间段结束；格式与 due_start 相同；传 null 等同省略。若早于 due_start 会自动与 due_start 交换，使截止时间总取较晚值。"
+						"type": "string",
+						"description": "可选。截止/时间段结束；格式与 due_start 相同；省略时不处理。若早于 due_start 会自动与 due_start 交换，使截止时间总取较晚值。"
 					},
 					"all_day": {
-						"type": [
-							"boolean",
-							"null"
-						],
-						"description": "可选。true 表示全天，due_start/due_end 必须为 YYYY-MM-DD；false 表示精确时间；传 null 等同省略。"
+						"type": "boolean",
+						"description": "可选。true 表示全天，due_start/due_end 必须为 YYYY-MM-DD；false 表示精确时间；省略时不处理。"
 					},
 					"tags": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string"
 						},
 						"description": "可选。标签字符串列表；默认空列表。"
 					},
 					"group": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "可选。分组或项目名称；默认空字符串。"
 					},
 					"description": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "可选。Markdown 格式的任务描述；默认空字符串。"
 					},
 					"reminder_offset": {
-						"type": [
-							"number",
-							"null"
-						],
-						"description": "可选。相对截止时间（due_end 或旧 due_start/due_date）提前的非负分钟数；必须同时提供截止时间；传 null 等同省略。"
+						"type": "number",
+						"description": "可选。相对截止时间（due_end 或旧 due_start/due_date）提前的非负分钟数；必须同时提供截止时间；省略时不处理。"
 					},
 					"repeat": {
-						"type": [
-							"object",
-							"null"
-						],
-						"description": "可选。重复规则；传 null 或直接省略均表示不重复。",
+						"type": "object",
+						"description": "可选。重复规则；省略表示不重复。",
 						"additionalProperties": false,
 						"properties": {
 							"type": {
@@ -147,7 +117,7 @@
 			}
 		},
 		"todo_get_task": {
-			"description": "按 ID 获取一个任务的完整详情及直接子任务；task_id 必填，没有可选参数，因此不需要传 null。",
+			"description": "按 ID 获取一个任务的完整详情及直接子任务摘要（输出字段为 children）；输出中的 due_date 仅为只读兼容别名，更新任务时请使用 due_start 或 due_end。task_id 必填，没有可选参数。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -163,23 +133,17 @@
 			}
 		},
 		"todo_search_tasks": {
-			"description": "按条件搜索任务；所有参数均可省略或传 null（等同省略）。默认查询未归档任务，包含已完成任务，按 createdAt 倒序，limit 为 50、offset 为 0。日期范围按任务时间段相交匹配。每个结果均返回 subtasks 直接子任务摘要（含 id）；子任务自身也会作为独立任务返回。",
+			"description": "按条件搜索任务；所有参数均可省略。默认查询未归档任务，包含已完成任务，按 createdAt 倒序，limit 为 50、offset 为 0。日期范围按任务时间段相交匹配。每个结果均返回 subtasks 直接子任务摘要（含 id）；子任务自身也会作为独立任务返回。输出中的 due_date 仅为只读兼容别名，更新任务时请使用 due_start 或 due_end。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
 				"properties": {
 					"keyword": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "可选。匹配标题和描述的关键词，不区分大小写。"
 					},
 					"status": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string",
 							"enum": [
@@ -191,10 +155,7 @@
 						"description": "可选。状态列表，匹配任一状态。"
 					},
 					"priority": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string",
 							"enum": [
@@ -207,125 +168,83 @@
 						"description": "可选。优先级列表，匹配任一优先级。"
 					},
 					"tags": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string"
 						},
 						"description": "可选。标签列表；搭配 tag_match_mode 使用。"
 					},
 					"tag_match_mode": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"enum": [
 							"any",
 							"all"
 						],
-						"description": "可选。标签匹配方式：any（默认）匹配任一标签，all 匹配全部标签。"
+						"description": "可选。标签匹配方式：any（默认）匹配任一标签，all 匹配全部标签；省略时默认 any。"
 					},
 					"group": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "可选。仅返回指定分组的任务。"
 					},
 					"parent_task_id": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "可选。仅返回该父任务的直接子任务。"
 					},
 					"root_only": {
-						"type": [
-							"boolean",
-							"null"
-						],
+						"type": "boolean",
 						"description": "可选。true 时仅返回没有父任务的顶层任务。"
 					},
 					"archived": {
-						"type": [
-							"boolean",
-							"null"
-						],
+						"type": "boolean",
 						"description": "可选。true 仅查询已归档任务；false 或省略仅查询未归档任务。"
 					},
 					"due_after": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "可选。筛选范围下界，ISO 8601 格式；任务结束时间需不早于该值。"
 					},
 					"due_before": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "可选。筛选范围上界，ISO 8601 格式；任务开始时间需不晚于该值。"
 					},
 					"include_no_due": {
-						"type": [
-							"boolean",
-							"null"
-						],
+						"type": "boolean",
 						"description": "可选。使用日期范围时，true 同时返回没有截止时间的任务；默认 false。"
 					},
 					"show_completed": {
-						"type": [
-							"boolean",
-							"null"
-						],
+						"type": "boolean",
 						"description": "可选。false 时排除已完成任务；省略时包含。"
 					},
 					"sort_by": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"enum": [
 							"priority",
 							"dueDate",
 							"createdAt",
 							"updatedAt"
 						],
-						"description": "可选。排序字段；默认 createdAt。"
+						"description": "可选。排序字段；省略时默认 createdAt。"
 					},
 					"sort_order": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"enum": [
 							"asc",
 							"desc"
 						],
-						"description": "可选。asc 升序或 desc 降序（默认）。"
+						"description": "可选。asc 升序或 desc 降序；省略时默认 desc。"
 					},
 					"limit": {
-						"type": [
-							"number",
-							"null"
-						],
+						"type": "number",
 						"description": "可选。返回数量，正数；无效值回退为 50。"
 					},
 					"offset": {
-						"type": [
-							"number",
-							"null"
-						],
+						"type": "number",
 						"description": "可选。从 0 开始的跳过数量；无效值回退为 0。"
 					}
 				}
 			}
 		},
 		"todo_update_task": {
-			"description": "更新任务。task_id 必填；只修改提供的字段。parent_task_id、due_start、due_end、all_day、reminder_offset、repeat、archived 传 null 会清除对应值；title、status、priority、tags、group、description 传 null 等同省略。status 改为 done 时会按重复规则生成下一实例。",
+			"description": "更新任务。task_id 必填；只修改提供的字段；省略的字段不会修改。status 和 priority 省略时不修改。status 改为 done 时会按重复规则生成下一实例。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -335,102 +254,66 @@
 						"description": "必填。要更新的任务 ID。"
 					},
 					"title": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。新的非空任务标题；null 等同省略。"
+						"type": "string",
+						"description": "可选。新的非空任务标题；省略时不修改。"
 					},
 					"status": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"enum": [
 							"todo",
 							"doing",
 							"done"
 						],
-						"description": "可选。新状态；null 等同省略。"
+						"description": "可选。新状态；省略时不修改。"
 					},
 					"priority": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"enum": [
 							"low",
 							"medium",
 							"high",
 							"urgent"
 						],
-						"description": "可选。新优先级；null 等同省略。"
+						"description": "可选。新优先级；省略时不修改。"
 					},
 					"parent_task_id": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。父任务 ID；传 null 使任务恢复为顶层任务。"
+						"type": "string",
+						"description": "可选。父任务 ID；省略时保持当前父任务。"
 					},
 					"due_start": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。开始时间；全天用 YYYY-MM-DD，否则 ISO 8601；传 null 清除开始时间。"
+						"type": "string",
+						"description": "可选。开始时间；全天用 YYYY-MM-DD，否则 ISO 8601；省略时不修改。"
 					},
 					"due_end": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。新的截止/结束时间；全天用 YYYY-MM-DD，否则 ISO 8601；传 null 清除结束时间。早于 due_start 会自动与 due_start 交换。"
+						"type": "string",
+						"description": "可选。新的截止/结束时间；全天用 YYYY-MM-DD，否则 ISO 8601；省略时不修改。早于 due_start 会自动与 due_start 交换。"
 					},
 					"all_day": {
-						"type": [
-							"boolean",
-							"null"
-						],
-						"description": "可选。全天标记；传 null 清除全天标记。"
+						"type": "boolean",
+						"description": "可选。全天标记；省略时不修改。同次更新日期时，true 使用 YYYY-MM-DD，false 使用 ISO 8601。"
 					},
 					"tags": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string"
 						},
-						"description": "可选。替换完整标签列表；传 null 等同省略。"
+						"description": "可选。替换完整标签列表；省略时不处理。"
 					},
 					"group": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。新分组；传空字符串可清空分组，null 等同省略。"
+						"type": "string",
+						"description": "可选。新分组；传空字符串可清空分组；省略时不修改。"
 					},
 					"description": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。新 Markdown 描述；传空字符串可清空，null 等同省略。"
+						"type": "string",
+						"description": "可选。新 Markdown 描述；传空字符串可清空；省略时不修改。"
 					},
 					"reminder_offset": {
-						"type": [
-							"number",
-							"null"
-						],
-						"description": "可选。相对截止时间（due_end 或旧 due_start/due_date）提前的非负分钟数；传 null 清除提醒。"
+						"type": "number",
+						"description": "可选。相对截止时间（due_end 或旧 due_start/due_date）提前的非负分钟数；省略时不修改。"
 					},
 					"repeat": {
-						"type": [
-							"object",
-							"null"
-						],
-						"description": "可选。重复规则；传 null 清除重复规则。",
+						"type": "object",
+						"description": "可选。重复规则；省略时不修改。",
 						"additionalProperties": false,
 						"properties": {
 							"type": {
@@ -448,18 +331,12 @@
 								"description": "必填。正间隔；单位由 type 决定。"
 							},
 							"repeat_until": {
-								"type": [
-									"string",
-									"null"
-								],
-								"description": "可选。停止生成的 ISO 8601 时间；null 等同省略。"
+								"type": "string",
+								"description": "可选。停止生成的 ISO 8601 时间；省略时不修改。"
 							},
 							"repeat_count": {
-								"type": [
-									"number",
-									"null"
-								],
-								"description": "可选。最多生成的后续实例数，必须为非负数；null 等同省略。"
+								"type": "number",
+								"description": "可选。最多生成的后续实例数，必须为非负数；省略时不修改。"
 							}
 						},
 						"required": [
@@ -468,11 +345,8 @@
 						]
 					},
 					"archived": {
-						"type": [
-							"boolean",
-							"null"
-						],
-						"description": "可选。true 归档，false 取消归档，null 也取消归档。"
+						"type": "boolean",
+						"description": "可选。true 归档，false 取消归档，省略时不修改。"
 					}
 				},
 				"required": [
@@ -481,7 +355,7 @@
 			}
 		},
 		"todo_delete_task": {
-			"description": "永久删除一个任务及其直接子任务。task_id 必填，没有可选参数，因此不需要传 null；执行前必须先向用户确认。",
+			"description": "永久删除一个任务及其直接子任务。调用方必须先获得用户确认；任务处理器不会自行验证确认状态。task_id 必填，没有可选参数。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -497,7 +371,7 @@
 			}
 		},
 		"todo_bulk_update": {
-			"description": "批量更新最多 100 个任务的状态、优先级、分组或归档状态。task_ids 必填，且至少提供一个更新字段；可选字段传 null 等同省略。批量完成重复任务也会生成下一实例。",
+			"description": "批量更新最多 100 个任务的状态、优先级、分组或归档状态。task_ids 必填，且至少提供一个更新字段；省略的字段不会修改。批量完成重复任务也会生成下一实例。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -543,23 +417,20 @@
 			}
 		},
 		"todo_get_overview": {
-			"description": "获取未归档任务的总览、状态/优先级分布、逾期、今日到期及标签和分组统计；group 可省略或传 null（等同省略）。",
+			"description": "获取未归档任务的总览、状态/优先级分布、逾期、今日到期及标签和分组统计；group 可省略。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
 				"properties": {
 					"group": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。仅统计指定分组；null 等同省略。"
+						"type": "string",
+						"description": "可选。仅统计指定分组；省略时统计全部分组。"
 					}
 				}
 			}
 		},
 		"todo_get_review": {
-			"description": "获取任务复盘指标：完成率、逾期率、未来七日计划、标签/分组分布和近七日完成趋势；没有输入参数，调用时不需要传 null。",
+			"description": "获取任务复盘指标：完成率、逾期率、未来七日计划、标签/分组分布和近七日完成趋势；没有输入参数。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -567,7 +438,7 @@
 			}
 		},
 		"todo_suggest_organization": {
-			"description": "仅分析未完成、未归档任务，返回需经用户确认后再用 todo_update_task 应用的优先级、分组、标签和日期建议；不会写入数据，没有输入参数，无需传 null。",
+			"description": "仅分析未完成、未归档任务，返回需先经用户确认、可直接作为 todo_update_task 字段传入的优先级、分组、标签和日期建议；日期建议使用 due_end 与 all_day。不会写入数据，没有输入参数。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -575,7 +446,7 @@
 			}
 		},
 		"todo_list_templates": {
-			"description": "列出全部任务模板；child_tasks 是套用时创建的富子任务内容，children 仅用于兼容旧客户端。没有输入参数，无需传 null。",
+			"description": "列出全部任务模板；child_tasks 是套用时创建的富子任务内容，children 仅用于兼容旧客户端。没有输入参数。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -583,77 +454,53 @@
 			}
 		},
 		"todo_create_template": {
-			"description": "创建可复用任务方案；name 和 title 必填，其余字段可省略或传 null（等同省略）。模板保存任务内容和步骤，不保存日期或重复规则。",
+			"description": "创建可复用任务方案；name 和 title 必填。priority 省略时默认 medium；其他可选字段可省略。模板保存任务内容和步骤，不保存日期或重复规则。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
 				"properties": {
 					"name": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "必填。非空模板名称。"
 					},
 					"title": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "必填。套用模板时使用的默认任务标题。"
 					},
 					"priority": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"enum": [
 							"low",
 							"medium",
 							"high",
 							"urgent"
 						],
-						"description": "可选。默认优先级，默认 medium。"
+						"description": "可选。默认优先级；省略时默认 medium。"
 					},
 					"tags": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string"
 						},
 						"description": "可选。默认标签列表。"
 					},
 					"group": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "可选。默认分组。"
 					},
 					"description": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"description": "可选。默认 Markdown 描述。"
 					},
 					"children": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string"
 						},
 						"description": "可选。套用时创建的直接子任务标题列表；空数组表示不创建。"
 					},
 					"child_tasks": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "object",
 							"additionalProperties": false,
@@ -691,10 +538,7 @@
 						"description": "可选。富子任务列表；提供时优先于 children。每项可覆盖模板的优先级、标签、分组与描述。"
 					},
 					"reminder_offset": {
-						"type": [
-							"number",
-							"null"
-						],
+						"type": "number",
 						"description": "可选。默认提前提醒分钟数，必须为非负数。"
 					}
 				},
@@ -705,7 +549,7 @@
 			}
 		},
 		"todo_update_template": {
-			"description": "更新模板字段。template_id 必填；只修改提供的字段。reminder_offset 传 null 会清除；name、title、priority、tags、group、description、children、child_tasks 传 null 等同省略；child_tasks 会整体覆盖模板步骤。",
+			"description": "更新模板字段。template_id 必填；只修改提供的字段。reminder_offset 省略时不修改；name、title、tags、group、description、children、child_tasks 省略时不修改；priority 省略时不修改；child_tasks 会整体覆盖模板步骤。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -715,71 +559,47 @@
 						"description": "必填。要更新的模板 ID。"
 					},
 					"name": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。新的非空模板名称；null 等同省略。"
+						"type": "string",
+						"description": "可选。新的非空模板名称；省略时不修改。"
 					},
 					"title": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。新的非空默认标题；null 等同省略。"
+						"type": "string",
+						"description": "可选。新的非空默认标题；省略时不修改。"
 					},
 					"priority": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"enum": [
 							"low",
 							"medium",
 							"high",
 							"urgent"
 						],
-						"description": "可选。新的默认优先级；null 等同省略。"
+						"description": "可选。新的默认优先级；省略时不修改。"
 					},
 					"tags": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string"
 						},
-						"description": "可选。替换完整默认标签列表；null 等同省略。"
+						"description": "可选。替换完整默认标签列表；省略时不修改。"
 					},
 					"group": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。新的默认分组；空字符串可清空，null 等同省略。"
+						"type": "string",
+						"description": "可选。新的默认分组；空字符串可清空；省略时不修改。"
 					},
 					"description": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。新的默认 Markdown 描述；空字符串可清空，null 等同省略。"
+						"type": "string",
+						"description": "可选。新的默认 Markdown 描述；空字符串可清空；省略时不修改。"
 					},
 					"children": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string"
 						},
-						"description": "可选。整体替换子任务标题列表；每项必须为非空字符串，null 等同省略。"
+						"description": "可选。整体替换子任务标题列表；每项必须为非空字符串；省略时不修改。"
 					},
 					"child_tasks": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "object",
 							"additionalProperties": false,
@@ -816,11 +636,8 @@
 						"description": "可选。整体替换富子任务步骤；提供时优先于 children。"
 					},
 					"reminder_offset": {
-						"type": [
-							"number",
-							"null"
-						],
-						"description": "可选。新的默认提前提醒分钟数，必须为非负数；null 清除。"
+						"type": "number",
+						"description": "可选。新的默认提前提醒分钟数，必须为非负数；省略时不修改。"
 					}
 				},
 				"required": [
@@ -829,7 +646,7 @@
 			}
 		},
 		"todo_apply_template": {
-			"description": "从模板构建一个任务及其扁平子任务。template_id 必填；未提供或传 null 的内容字段继承模板，description、priority、tags、group 和 child_tasks 可按本次需求覆盖。child_tasks 传入后整体替换模板步骤。日期和提醒只作用于本次创建，不会修改模板；模板不会产生重复规则。",
+			"description": "从模板构建一个任务及其扁平子任务。template_id 必填；未提供的内容字段继承模板，未提供的内容字段继承模板。description、priority、tags、group 和 child_tasks 可按本次需求覆盖。child_tasks 传入后整体替换模板步骤。日期和提醒只作用于本次创建，不会修改模板；模板不会产生重复规则。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -839,54 +656,36 @@
 						"description": "必填。要套用的模板 ID。"
 					},
 					"title": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。覆盖模板标题；null 等同使用模板标题。"
+						"type": "string",
+						"description": "可选。覆盖模板标题；省略时使用模板标题。"
 					},
 					"description": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。整体替换模板描述；传空字符串可清空，null 等同使用模板描述。"
+						"type": "string",
+						"description": "可选。整体替换模板描述；传空字符串可清空，省略时使用模板描述。"
 					},
 					"priority": {
-						"type": [
-							"string",
-							"null"
-						],
+						"type": "string",
 						"enum": [
 							"low",
 							"medium",
 							"high",
 							"urgent"
 						],
-						"description": "可选。覆盖模板默认优先级；null 等同使用模板优先级。"
+						"description": "可选。覆盖模板默认优先级；省略时使用模板优先级。"
 					},
 					"tags": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "string"
 						},
-						"description": "可选。覆盖模板标签；null 等同使用模板标签。"
+						"description": "可选。覆盖模板标签；省略时使用模板标签。"
 					},
 					"group": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。覆盖模板分组；null 等同使用模板分组。"
+						"type": "string",
+						"description": "可选。覆盖模板分组；省略时使用模板分组。"
 					},
 					"child_tasks": {
-						"type": [
-							"array",
-							"null"
-						],
+						"type": "array",
 						"items": {
 							"type": "object",
 							"additionalProperties": false,
@@ -922,35 +721,23 @@
 								"title"
 							]
 						},
-						"description": "可选。整体替换模板中的直接子任务；未提供字段继承本次主任务的优先级、标签和分组。null 等同使用模板步骤。"
+						"description": "可选。整体替换模板中的直接子任务；未提供字段继承本次主任务的优先级、标签和分组。省略时使用模板步骤。"
 					},
 					"reminder_offset": {
-						"type": [
-							"number",
-							"null"
-						],
-						"description": "可选。覆盖模板的提前提醒分钟数；null 清除本次任务提醒；没有截止时间时不能设置。"
+						"type": "number",
+						"description": "可选。覆盖模板的提前提醒分钟数；省略时使用模板提醒；没有截止时间时不能设置。"
 					},
 					"due_start": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。计划开始；all_day=true 时 YYYY-MM-DD，否则 ISO 8601；null 表示不设置时间。单点任务只需 due_end；与 due_end 同时存在时自动按时间升序归一化。"
+						"type": "string",
+						"description": "可选。计划开始；all_day=true 时 YYYY-MM-DD，否则 ISO 8601；省略表示不设置时间。单点任务只需 due_end；与 due_end 同时存在时自动按时间升序归一化。"
 					},
 					"due_end": {
-						"type": [
-							"string",
-							"null"
-						],
-						"description": "可选。计划结束（截止时间）；格式与 due_start 相同；早于 due_start 时自动交换；null 等同不设置。"
+						"type": "string",
+						"description": "可选。计划结束（截止时间）；格式与 due_start 相同；早于 due_start 时自动交换；省略表示不设置。"
 					},
 					"all_day": {
-						"type": [
-							"boolean",
-							"null"
-						],
-						"description": "可选。true 使用全天日期，false 使用精确时间；null 等同省略。"
+						"type": "boolean",
+						"description": "可选。true 使用全天日期，false 使用精确时间；省略时不设置。"
 					}
 				},
 				"required": [
@@ -959,7 +746,7 @@
 			}
 		},
 		"todo_delete_template": {
-			"description": "永久删除模板。template_id 必填，没有可选参数，因此不需要传 null；执行前必须先向用户确认。",
+			"description": "永久删除模板。调用方必须先获得用户确认；模板处理器不会自行验证确认状态。template_id 必填，没有可选参数。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -975,30 +762,24 @@
 			}
 		},
 		"todo_list_due_reminders": {
-			"description": "列出当前应提醒或已逾期的未完成任务；可选参数可省略或传 null（等同省略）。默认包含逾期任务，limit 为 50。",
+			"description": "列出当前应提醒或已逾期的未完成任务；可选参数可省略。默认包含逾期任务，limit 为 50。include_overdue=false 时，不会仅因任务逾期而纳入结果；提醒时间已到的任务即使逾期仍会返回。仅因逾期入选且未设置提醒时，reminder_at 为空。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
 				"properties": {
 					"include_overdue": {
-						"type": [
-							"boolean",
-							"null"
-						],
+						"type": "boolean",
 						"description": "可选。false 时只返回已到提醒时间的任务；true 或省略时也返回逾期任务。"
 					},
 					"limit": {
-						"type": [
-							"number",
-							"null"
-						],
+						"type": "number",
 						"description": "可选。最多返回数量，正数；无效值回退为 50。"
 					}
 				}
 			}
 		},
 		"todo_snooze_reminder": {
-			"description": "将指定任务的下一次提醒延后指定分钟数。task_id 和 minutes 均必填，没有可选参数，因此不需要传 null。",
+			"description": "将指定任务的下一次提醒延后指定分钟数；只写入延后标记，不会创建 reminder_offset。没有截止时间或 reminder_offset 时不会产生可触发提醒。task_id 和 minutes 均必填，没有可选参数。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,
@@ -1019,7 +800,7 @@
 			}
 		},
 		"todo_acknowledge_reminder": {
-			"description": "确认已处理指定任务的提醒，避免该提醒再次出现在待提醒列表。task_id 必填，没有可选参数，因此不需要传 null。",
+			"description": "确认已处理指定任务的提醒，避免该提醒再次出现在待提醒列表。task_id 必填，没有可选参数。",
 			"inputSchema": {
 				"type": "object",
 				"additionalProperties": false,

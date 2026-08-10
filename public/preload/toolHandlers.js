@@ -1517,7 +1517,11 @@ function suggestOrganizationHandler(dbStorage, params) {
 			else if (/(运动|健身|跑步|体检|医生|健康|买|采购|缴费|快递|家务|做饭)/i.test(text)) { patch.group = '生活'; reasons.push('补充分组：生活'); }
 		}
 		if ((!task.tags || task.tags.length === 0) && /(项目|评审|发布|上线)/i.test(text)) { patch.tags = ['项目']; reasons.push('补充标签：项目'); }
-		if (getTaskDeadline(task) === undefined && /明天/.test(text)) { patch.due_end = tomorrow.getTime(); patch.all_day = true; reasons.push('识别截止日期'); }
+		if (getTaskDeadline(task) === undefined && /明天/.test(text)) {
+			patch.due_end = String(tomorrow.getFullYear()) + '-' + String(tomorrow.getMonth() + 1).padStart(2, '0') + '-' + String(tomorrow.getDate()).padStart(2, '0');
+			patch.all_day = true;
+			reasons.push('识别截止日期');
+		}
 		if (Object.keys(patch).length) changes.push({ task_id: task.id, title: task.title, patch: patch, reasons: reasons });
 		else skipped++;
 	});

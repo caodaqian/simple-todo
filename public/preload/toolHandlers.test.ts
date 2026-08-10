@@ -1431,26 +1431,50 @@ describe('toolHandlers – pure logic', () => {
 
 describe('MCP schema contract', () => {
 	const plugin = JSON.parse(readFileSync(resolve(process.cwd(), 'public/plugin.json'), 'utf8')) as {
-		tools: Record<string, { description: string; inputSchema: { properties: Record<string, { type?: string | string[]; description?: string }> } }>;
+		tools: Record<string, { description: string; inputSchema: { properties: Record<string, { type?: string; anyOf?: Array<{ type: string }>; enum?: unknown[]; description?: string }> } }>;
 	};
 
-	it('documents the null-as-omitted rule on every registered tool', () => {
+	it('does not document null for enum-constrained parameters', () => {
 		for (const tool of Object.values(plugin.tools)) {
-			expect(tool.description).toContain('null');
+			for (const property of Object.values(tool.inputSchema.properties)) {
+				if (property.enum !== undefined) expect(property.description).not.toContain('null');
+			}
 		}
 	});
 
-	it('accepts null for optional schedule fields and rich template children', () => {
+	it('uses scalar types for optional fields without nullable schemas', () => {
 		for (const toolName of ['todo_create_task', 'todo_apply_template']) {
 			const properties = plugin.tools[toolName]!.inputSchema.properties;
-			expect(properties.due_start!.type).toContain('null');
-			expect(properties.due_end!.type).toContain('null');
-			expect(properties.all_day!.type).toContain('null');
+			expect(properties.due_start!.type).toBe('string');
+			expect(properties.due_start!.anyOf).toBeUndefined();
+			expect(properties.due_end!.type).toBe('string');
+			expect(properties.due_end!.anyOf).toBeUndefined();
+			expect(properties.all_day!.type).toBe('boolean');
+			expect(properties.all_day!.anyOf).toBeUndefined();
 		}
-		expect(plugin.tools.todo_create_task!.inputSchema.properties.repeat!.type).toContain('null');
-		expect(plugin.tools.todo_create_template!.inputSchema.properties.child_tasks!.type).toContain('null');
-		expect(plugin.tools.todo_update_template!.inputSchema.properties.child_tasks!.type).toContain('null');
+		expect(plugin.tools.todo_create_task!.inputSchema.properties.repeat!.type).toBe('object');
+		expect(plugin.tools.todo_create_task!.inputSchema.properties.repeat!.anyOf).toBeUndefined();
+		expect(plugin.tools.todo_create_template!.inputSchema.properties.child_tasks!.type).toBe('array');
+		expect(plugin.tools.todo_create_template!.inputSchema.properties.child_tasks!.anyOf).toBeUndefined();
+		expect(plugin.tools.todo_update_template!.inputSchema.properties.child_tasks!.type).toBe('array');
+		expect(plugin.tools.todo_update_template!.inputSchema.properties.child_tasks!.anyOf).toBeUndefined();
 		expect(plugin.tools.todo_create_template!.inputSchema.properties).not.toHaveProperty('repeat');
+	});
+
+	it('uses a single JSON type for every input property', () => {
+		const assertScalarTypes = (schema: unknown): void => {
+			if (Array.isArray(schema)) {
+				schema.forEach(assertScalarTypes);
+				return;
+			}
+			if (!schema || typeof schema !== 'object') return;
+			const value = schema as Record<string, unknown>;
+			if (typeof value.type === 'string' || Array.isArray(value.type)) expect(typeof value.type).toBe('string');
+			expect(value).not.toHaveProperty('anyOf');
+			Object.values(value).forEach(assertScalarTypes);
+		};
+
+		Object.values(plugin.tools).forEach((tool) => assertScalarTypes(tool.inputSchema));
 	});
 });
 
@@ -1618,6 +1642,25 @@ describe('unified MCP task contract', () => {
 		const plan = handlers.suggestOrganizationHandler(db) as { changes: Array<{ task_id: string; reasons: string[] }> };
 		expect(plan.changes).toEqual(expect.arrayContaining([expect.objectContaining({ task_id: 'suggest' })]));
 		expect((db.snapshot() as Array<Record<string, unknown>>)[0]!.group).toBe('');
+	});
+
+	it('returns organization date suggestions that can be applied through task updates', () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-08-10T12:00:00Z'));
+		seedTask(db, { id: 'suggest-date', title: '明天完成项目评审', priority: 'medium', tags: [], group: '' });
+
+		const suggestion = handlers.suggestOrganizationHandler(db) as {
+			changes: Array<{ task_id: string; patch: Record<string, unknown> }>;
+		};
+		const change = suggestion.changes.find((item) => item.task_id === 'suggest-date')!;
+
+		expect(change.patch).toMatchObject({ due_end: '2026-08-11', all_day: true });
+		handlers.updateTaskHandler(db, { task_id: change.task_id, ...change.patch });
+
+		const task = (db.snapshot() as Array<Record<string, unknown>>).find((item) => item.id === change.task_id)!;
+		expect(task.dueEnd).toBe(new Date(2026, 7, 11).getTime());
+		expect(task.allDay).toBe(true);
+		vi.useRealTimers();
 	});
 
 	it('auto-sorts a reversed datetime range into ascending endpoints', () => {
