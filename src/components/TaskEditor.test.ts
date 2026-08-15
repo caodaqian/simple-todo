@@ -31,6 +31,7 @@ beforeEach(() => {
 				setItem: vi.fn(),
 				removeItem: vi.fn(),
 			},
+			shellOpenExternal: vi.fn(),
 		},
 	});
 	window.services = {
@@ -199,5 +200,68 @@ describe('TaskEditor compact layout', () => {
 
 		expect(event.defaultPrevented).toBe(false);
 		expect(editor.querySelector('.link-paste-menu')).toBeNull();
+	});
+
+	it('opens the title input automatically when fetching a pasted URL title fails', async () => {
+		vi.mocked(window.services.fetchPageTitle).mockRejectedValueOnce(new Error('network error'));
+		const editor = await mountEditor();
+		editor.querySelector<HTMLElement>('.desc-preview')?.click();
+		await nextTick();
+		const textarea = editor.querySelector<HTMLTextAreaElement>('#task-description-input')!;
+		textarea.focus();
+		textarea.setSelectionRange(0, 0);
+		const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+		Object.defineProperty(pasteEvent, 'clipboardData', {
+			value: { getData: () => 'https://example.com/docs' },
+		});
+		textarea.dispatchEvent(pasteEvent);
+		await nextTick();
+		await Promise.resolve();
+		await nextTick();
+
+		const input = editor.querySelector<HTMLInputElement>('#link-label-input');
+		expect(input).not.toBeNull();
+		expect(input?.value).toBe('https://example.com/docs');
+		expect(document.activeElement).toBe(input);
+
+		if (!input) throw new Error('Link title input did not render');
+		input.value = '手动标题';
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		editor.querySelector<HTMLButtonElement>('.link-paste-menu .btn-primary')?.click();
+		await nextTick();
+
+		expect(textarea.value).toBe('[手动标题](https://example.com/docs)');
+	});
+
+	it('opens an https preview link in the system browser without entering edit mode', async () => {
+		const shellOpenExternal = vi.mocked(window.utools!.shellOpenExternal!);
+		const editor = await mountEditor({
+			id: 'task-1', title: '任务', status: 'todo', priority: 'medium', tags: [], group: '',
+			description: '[文档](https://example.com/docs)', subtasks: [], createdAt: 1, updatedAt: 1,
+		});
+		const link = editor.querySelector<HTMLAnchorElement>('.desc-preview a');
+		expect(link).not.toBeNull();
+
+		link?.click();
+		await nextTick();
+
+		expect(shellOpenExternal).toHaveBeenCalledWith('https://example.com/docs');
+		expect(editor.querySelector('#task-description-input')).toBeNull();
+	});
+
+	it('does not open non-web preview links or enter edit mode', async () => {
+		const shellOpenExternal = vi.mocked(window.utools!.shellOpenExternal!);
+		const editor = await mountEditor({
+			id: 'task-1', title: '任务', status: 'todo', priority: 'medium', tags: [], group: '',
+			description: '[邮件](mailto:test@example.com)', subtasks: [], createdAt: 1, updatedAt: 1,
+		});
+		const link = editor.querySelector<HTMLAnchorElement>('.desc-preview a');
+		expect(link).not.toBeNull();
+
+		link?.click();
+		await nextTick();
+
+		expect(shellOpenExternal).not.toHaveBeenCalled();
+		expect(editor.querySelector('#task-description-input')).toBeNull();
 	});
 });

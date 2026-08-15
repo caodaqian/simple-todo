@@ -233,9 +233,15 @@ import TaskQuickActions from './TaskQuickActions.vue';
     const requestId = ++linkTitleRequestId;
     void window.services.fetchPageTitle(url).then((title) => {
       if (requestId !== linkTitleRequestId || !linkMenuVisible.value) return;
-      if (linkLabelDraft.value === url) linkLabelDraft.value = title || url;
+      if (title) {
+        if (linkLabelDraft.value === url) linkLabelDraft.value = title;
+      } else if (linkLabelDraft.value === url) {
+        beginEditPendingLink();
+      }
     }).catch(() => {
-      if (requestId === linkTitleRequestId && linkMenuVisible.value && linkLabelDraft.value.trim() === '') linkLabelDraft.value = url;
+      if (requestId === linkTitleRequestId && linkMenuVisible.value && linkLabelDraft.value === url) {
+        beginEditPendingLink();
+      }
     }).finally(() => {
       if (requestId === linkTitleRequestId) linkTitleLoading.value = false;
     });
@@ -297,6 +303,21 @@ import TaskQuickActions from './TaskQuickActions.vue';
       flushDescRender();
       descEditing.value = false;
     }, DESC_BLUR_DELAY_MS);
+  };
+
+  const handleDescriptionPreviewClick = (event: MouseEvent): void => {
+    const preview = event.currentTarget;
+    const target = event.target;
+    const anchor = target instanceof Element ? target.closest('a') : null;
+    if (!(preview instanceof HTMLElement) || !anchor || !preview.contains(anchor)) {
+      void enterDescEditing();
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const url = isSingleHttpUrl(anchor.getAttribute('href') ?? '');
+    if (url) window.utools?.shellOpenExternal?.(url);
   };
 
   watch(
@@ -1381,7 +1402,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
                     <button type="button" class="btn btn-ghost" @click="closeLinkMenu">取消</button>
                   </div>
                 </div>
-                <div v-if="!descEditing" class="desc-preview" :class="{ 'is-empty': !descPreviewHtml }" @click="enterDescEditing">
+                <div v-if="!descEditing" class="desc-preview" :class="{ 'is-empty': !descPreviewHtml }" @click="handleDescriptionPreviewClick">
                   <div v-if="descPreviewHtml" v-html="descPreviewHtml"></div>
                   <p v-else class="desc-empty">点击此处添加描述（支持 Markdown）</p>
                 </div>

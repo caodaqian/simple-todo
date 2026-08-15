@@ -117,6 +117,7 @@ interface Window {
 		getPath(name: string): string;
 		getWindowWidth(): number;
 		getWindowHeight(): number;
+		shellOpenExternal?(url: string): void;
 		registerTool(name: string, handler: UtoolsRegisterToolHandler): void;
 		copyText(text: string): void;
 		readText(): Promise<string>;
