@@ -171,14 +171,14 @@ onMounted(() => {
   load();
   window.addEventListener(STICKY_INIT_EVENT, handleStickyInit);
   window.addEventListener(STICKY_SOURCE_UPDATED_EVENT, handleStickyInit);
-  window.addEventListener('keydown', detailMenu.closeOnEscape);
+  window.addEventListener('keydown', detailMenu.closeOnEscape, true);
   refreshTimer = window.setInterval(load, 2_000);
 });
 
 onUnmounted(() => {
   window.removeEventListener(STICKY_INIT_EVENT, handleStickyInit);
   window.removeEventListener(STICKY_SOURCE_UPDATED_EVENT, handleStickyInit);
-  window.removeEventListener('keydown', detailMenu.closeOnEscape);
+  window.removeEventListener('keydown', detailMenu.closeOnEscape, true);
   if (refreshTimer !== null) window.clearInterval(refreshTimer);
 });
 </script>

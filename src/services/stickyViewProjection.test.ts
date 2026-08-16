@@ -108,6 +108,19 @@ describe('buildStickyTaskGroups', () => {
 		expect(groups.map((group) => group.tasks.length)).toEqual([1, 1, 1, 1]);
 	});
 
+	it('sorts eisenhower groups by deadline regardless of source sort', () => {
+		const groups = buildStickyTaskGroups([
+			makeTask({ id: 'undated', priority: 'urgent', createdAt: 1 }),
+			makeTask({ id: 'early', priority: 'urgent', dueEnd: 100, createdAt: 2 }),
+			makeTask({ id: 'late', priority: 'urgent', dueEnd: 500, createdAt: 3 }),
+		], makeSource({
+			view: 'eisenhower',
+			sort: { field: 'createdAt', order: 'asc' },
+		}));
+
+		expect(groups[0]!.tasks.map((item) => item.task.id)).toEqual(['late', 'early', 'undated']);
+	});
+
 	it('groups calendar tasks by due date', () => {
 		const groups = buildStickyTaskGroups([
 			makeTask({ id: 'a', dueStart: new Date('2026-07-05T10:00:00+08:00').getTime() }),

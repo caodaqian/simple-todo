@@ -17,7 +17,9 @@ export const useStickyDetailMenu = () => {
 	};
 
 	const closeOnEscape = (event: KeyboardEvent): void => {
-		if (event.key === 'Escape') close();
+		if (event.key !== 'Escape') return;
+		event.preventDefault();
+		close();
 	};
 
 	return { activeTaskId, open, openFromContextMenu, close, closeOnEscape };

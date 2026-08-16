@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+  import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useCompletionBlockedModal } from '../composables/useCompletionBlockedModal';
 import { useImeGuard } from '../composables/useImeGuard';
 import { getNextTaskStatus } from '../composables/useTaskQuickActions';
@@ -7,7 +7,7 @@ import { buildMarkdownLink, isSingleHttpUrl } from '../services/linkPasteService
 import { renderMarkdown } from '../services/markdownService';
 import { taskService, type AddSubtaskOverrides } from '../services/taskService';
 import { templateService } from '../services/templateService';
-  import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate, TaskTemplateDateRule } from '../types/task';
+import type { CreateTaskInput, RepeatRule, SaveTaskInput, Task, TaskPriority, TaskStatus, TaskTemplate, TaskTemplateDateRule } from '../types/task';
 import { getTaskDeadline, getTaskStart, normalizeAllDayDateRange, normalizeDateRange } from '../types/task';
 import AppIcon from './AppIcon.vue';
 import PomodoroStartButton from './PomodoroStartButton.vue';
@@ -891,6 +891,19 @@ import TaskQuickActions from './TaskQuickActions.vue';
     emit('update:modelValue', false);
   };
 
+  const handleEditorKeydown = (event: KeyboardEvent): void => {
+    if (
+      !props.modelValue
+      || event.defaultPrevented
+      || (!event.ctrlKey && !event.metaKey)
+      || !event.shiftKey
+      || event.altKey
+      || event.key.toLowerCase() !== 'w'
+    ) return;
+    event.preventDefault();
+    closeEditor();
+  };
+
   const handleAddSubtask = (rawTitle: string, overrides?: AddSubtaskOverrides): void => {
     const title = rawTitle.trim();
     if (!title) return;
@@ -1189,6 +1202,7 @@ import TaskQuickActions from './TaskQuickActions.vue';
   );
 
   onBeforeUnmount(() => {
+    window.removeEventListener('keydown', handleEditorKeydown);
     removeTemplateMenuListeners();
     closeLinkMenu();
     if (autoSaveTimer) {
@@ -1203,6 +1217,10 @@ import TaskQuickActions from './TaskQuickActions.vue';
       clearTimeout(descBlurTimer);
       descBlurTimer = null;
     }
+  });
+
+  onMounted(() => {
+    window.addEventListener('keydown', handleEditorKeydown);
   });
 
   // ─── 新建模式：手动创建 ──────────────────────────────

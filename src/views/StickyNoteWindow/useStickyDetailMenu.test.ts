@@ -14,13 +14,15 @@ describe('useStickyDetailMenu', () => {
 
 	it('closes details with Escape only', () => {
 		const menu = useStickyDetailMenu();
+		const preventDefault = vi.fn();
 		menu.open('task-1');
 
-		menu.closeOnEscape({ key: 'Enter' } as KeyboardEvent);
+		menu.closeOnEscape({ key: 'Enter', preventDefault } as unknown as KeyboardEvent);
 		expect(menu.activeTaskId.value).toBe('task-1');
 
-		menu.closeOnEscape({ key: 'Escape' } as KeyboardEvent);
+		menu.closeOnEscape({ key: 'Escape', preventDefault } as unknown as KeyboardEvent);
 		expect(menu.activeTaskId.value).toBeNull();
+		expect(preventDefault).toHaveBeenCalledTimes(1);
 	});
 
 	it('closes the active detail card explicitly', () => {

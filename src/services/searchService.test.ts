@@ -166,6 +166,13 @@ describe('sort by deadline uses getTaskDeadline', () => {
 		const result = searchAndSortTasks([a, b], {}, { field: 'dueDate', order: 'asc' });
 		expect(result.map((t) => t.id)).toEqual(['b', 'a']);
 	});
+	it('orders deadlines from latest to earliest and keeps undated tasks last', () => {
+		const late = createTask({ id: 'late', dueEnd: 500 });
+		const early = createTask({ id: 'early', dueEnd: 100 });
+		const undated = createTask({ id: 'undated' });
+		const result = searchAndSortTasks([undated, early, late], {}, { field: 'dueDate', order: 'desc' });
+		expect(result.map((t) => t.id)).toEqual(['late', 'early', 'undated']);
+	});
 	it('range filter overlaps when start beyond rangeStart but deadline before rangeEnd', () => {
 		const rules = getTaskDateRules(new Date('2026-06-22T10:00:00+08:00').getTime(), 7);
 		void rules;

@@ -145,7 +145,10 @@ const buildCalendarGroups = (tasks: Task[], context: StickyProjectionContext): S
 };
 
 export const buildStickyTaskGroups = (tasks: Task[], source: StickyNoteSource): StickyTaskGroup[] => {
-	const filtered = searchAndSortTasks(tasks, source.filter, source.sort);
+	const sort = source.view === 'eisenhower'
+		? { field: 'dueDate' as const, order: 'desc' as const }
+		: source.sort;
+	const filtered = searchAndSortTasks(tasks, source.filter, sort);
 	const context = createStickyProjectionContext(tasks);
 	switch (source.view) {
 		case 'kanban':

@@ -47,7 +47,7 @@ import type { SaveTaskInput, Task, TaskSearchFilter } from '../../types/task';
       searchAndSortTasks(
         props.tasks,
         { ...props.filter },
-        { field: 'dueDate', order: 'asc' },
+        { field: 'dueDate', order: 'desc' },
       ),
     ),
   );

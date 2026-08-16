@@ -7,10 +7,10 @@ import TaskEditor from './TaskEditor.vue';
 
 const mounts: Array<() => void> = [];
 
-const mountEditor = async (task?: Task): Promise<HTMLElement> => {
+const mountEditor = async (task?: Task, onUpdateModelValue?: (value: boolean) => void): Promise<HTMLElement> => {
 	const root = document.createElement('div');
 	document.body.append(root);
-	const app = createApp(TaskEditor, { modelValue: true, task });
+	const app = createApp(TaskEditor, { modelValue: true, task, 'onUpdate:modelValue': onUpdateModelValue });
 	app.mount(root);
 	mounts.push(() => {
 		app.unmount();
@@ -88,6 +88,42 @@ describe('TaskEditor compact layout', () => {
 
 		expect(editor.querySelector('[data-testid="template-menu"]')).toBeNull();
 		expect(document.activeElement).toBe(trigger);
+	});
+
+	it('closes the task editor with Ctrl+Shift+W', async () => {
+		const updates: boolean[] = [];
+		await mountEditor(undefined, (value) => updates.push(value));
+		const event = new KeyboardEvent('keydown', {
+			key: 'W',
+			ctrlKey: true,
+			shiftKey: true,
+			bubbles: true,
+			cancelable: true,
+		});
+
+		document.dispatchEvent(event);
+		await nextTick();
+
+		expect(updates).toEqual([false]);
+		expect(event.defaultPrevented).toBe(true);
+	});
+
+	it('closes the task editor with Cmd+Shift+W', async () => {
+		const updates: boolean[] = [];
+		await mountEditor(undefined, (value) => updates.push(value));
+		const event = new KeyboardEvent('keydown', {
+			key: 'W',
+			metaKey: true,
+			shiftKey: true,
+			bubbles: true,
+			cancelable: true,
+		});
+
+		document.dispatchEvent(event);
+		await nextTick();
+
+		expect(updates).toEqual([false]);
+		expect(event.defaultPrevented).toBe(true);
 	});
 
 	it('persists template children when applying a template to an existing task', async () => {
