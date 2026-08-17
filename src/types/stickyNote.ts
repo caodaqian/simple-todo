@@ -1,5 +1,5 @@
 import type { SavedFilterView, TodoView } from './settings';
-import type { Task, TaskSearchFilter, TaskSortOption } from './task';
+import type { Task, TaskSearchFilter, TaskSortConfig } from './task';
 
 export type StickyNoteSourceKind = 'current' | 'saved';
 
@@ -9,7 +9,7 @@ export interface StickyNoteSource {
 	view: TodoView;
 	section: string;
 	filter: TaskSearchFilter;
-	sort?: TaskSortOption;
+	sort?: TaskSortConfig;
 	savedViewId?: string;
 	updatedAt: number;
 }

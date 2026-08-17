@@ -1,7 +1,7 @@
 import type { SavedFilterView, TodoView } from '../types/settings';
 import type { StickyCurrentSourceInput, StickyNoteSource } from '../types/stickyNote';
-import type { TaskSearchFilter, TaskSortOption } from '../types/task';
-import { isSortOption, isTaskSearchFilter } from './filterUtils';
+import type { TaskSearchFilter, TaskSortConfig, TaskSortOption } from '../types/task';
+import { isTaskSearchFilter, parseTaskSortConfig } from './filterUtils';
 import { STORAGE_KEYS } from './storageKeys';
 
 interface UtoolsDbStorage {
@@ -39,7 +39,10 @@ const cloneFilter = (filter: TaskSearchFilter): TaskSearchFilter => {
 	if (Array.isArray(filter.priority)) cloned.priority = [...filter.priority];
 	return cloned;
 };
-const cloneSort = (sort: TaskSortOption | undefined): TaskSortOption | undefined => sort ? { ...sort } : undefined;
+const cloneSort = (sort: TaskSortConfig | TaskSortOption | undefined): TaskSortConfig | undefined => {
+	if (sort === undefined) return undefined;
+	return parseTaskSortConfig(sort);
+};
 
 const cloneSource = (source: StickyNoteSource): StickyNoteSource => {
 	const cloned: StickyNoteSource = {
@@ -50,7 +53,8 @@ const cloneSource = (source: StickyNoteSource): StickyNoteSource => {
 		filter: cloneFilter(source.filter),
 		updatedAt: source.updatedAt,
 	};
-	if (source.sort !== undefined) cloned.sort = { ...source.sort };
+	const clonedSort = cloneSort(source.sort);
+	if (clonedSort !== undefined) cloned.sort = clonedSort;
 	if (source.savedViewId !== undefined) cloned.savedViewId = source.savedViewId;
 	return cloned;
 };
@@ -63,7 +67,7 @@ const toStickyNoteSource = (value: unknown): StickyNoteSource | null => {
 	if (!isTodoView(view)) return null;
 	if (typeof section !== 'string') return null;
 	if (!isTaskSearchFilter(filter)) return null;
-	if (sort !== undefined && !isSortOption(sort)) return null;
+	const parsedSort = sort === undefined ? undefined : parseTaskSortConfig(sort);
 	if (savedViewId !== undefined && typeof savedViewId !== 'string') return null;
 	if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return null;
 
@@ -75,7 +79,7 @@ const toStickyNoteSource = (value: unknown): StickyNoteSource | null => {
 		filter: cloneFilter(filter),
 		updatedAt,
 	};
-	if (sort !== undefined) source.sort = { ...sort };
+	if (parsedSort !== undefined) source.sort = parsedSort;
 	if (savedViewId !== undefined) source.savedViewId = savedViewId;
 	return source;
 };

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { TodoView } from '../types/settings';
-import type { TaskSearchFilter, TaskSortOption } from '../types/task';
+import type { TaskSearchFilter, TaskSortConfig } from '../types/task';
 import { DEFAULT_UI_STATE, type SideSection, type UiState } from '../types/uiState';
 import { uiStateService } from './uiStateService';
 
@@ -49,7 +49,11 @@ describe('uiStateService', () => {
 		expect(state.currentView).toBe('list');
 		expect(state.activeSection).toBe('inbox');
 		expect(state.activeFilter).toEqual({});
-		expect(state.activeSort).toEqual({ field: 'updatedAt', order: 'desc' });
+		expect(state.activeSort).toEqual([
+			{ field: 'priority', order: 'desc' },
+			{ field: 'dueDate', order: 'asc' },
+			{ field: 'status', order: 'asc' },
+		]);
 	});
 
 	it('persists and re-reads a full view state round-trip', () => {
@@ -63,7 +67,7 @@ describe('uiStateService', () => {
 			showCompleted: true,
 			dateRange: { start: 1700000000000, end: 1800000000000 },
 		};
-		const sort: TaskSortOption = { field: 'priority', order: 'asc' };
+		const sort: TaskSortConfig = [{ field: 'priority', order: 'asc' }];
 		const state: UiState = {
 			currentView: 'kanban',
 			activeSection: 'tag:frontend',
@@ -91,7 +95,7 @@ describe('uiStateService', () => {
 		expect(state.currentView).toBe('list');
 		// 其他合法字段应保留
 		expect(state.activeSection).toBe('today');
-		expect(state.activeSort).toEqual({ field: 'createdAt', order: 'desc' });
+		expect(state.activeSort).toEqual([{ field: 'createdAt', order: 'desc' }]);
 	});
 
 	it('falls back activeSection to inbox when empty or unknown prefix', () => {
@@ -150,24 +154,32 @@ describe('uiStateService', () => {
 			activeFilter: {},
 			activeSort: { field: 'bogus', order: 'sideways' },
 		});
-		expect(uiStateService.getUiState().activeSort).toEqual({ field: 'updatedAt', order: 'desc' });
+		expect(uiStateService.getUiState().activeSort).toEqual([
+			{ field: 'priority', order: 'desc' },
+			{ field: 'dueDate', order: 'asc' },
+			{ field: 'status', order: 'asc' },
+		]);
 
 		writeStored({
 			currentView: 'list',
 			activeSection: 'inbox',
 			activeFilter: {},
 		});
-		expect(uiStateService.getUiState().activeSort).toEqual({ field: 'updatedAt', order: 'desc' });
+		expect(uiStateService.getUiState().activeSort).toEqual([
+			{ field: 'priority', order: 'desc' },
+			{ field: 'dueDate', order: 'asc' },
+			{ field: 'status', order: 'asc' },
+		]);
 	});
 
-	it('preserves sort with undefined order (omit order key)', () => {
+	it('migrates a legacy sort with omitted order using the field default', () => {
 		writeStored({
 			currentView: 'list',
 			activeSection: 'inbox',
 			activeFilter: {},
 			activeSort: { field: 'priority' },
 		});
-		expect(uiStateService.getUiState().activeSort).toEqual({ field: 'priority' });
+		expect(uiStateService.getUiState().activeSort).toEqual([{ field: 'priority', order: 'desc' }]);
 	});
 
 	it('returns default state when stored JSON is corrupt', () => {
@@ -216,7 +228,7 @@ describe('uiStateService', () => {
 			currentView: 'calendar',
 			activeSection: 'done',
 			activeFilter: { keyword: 'x' },
-			activeSort: { field: 'dueDate', order: 'asc' },
+			activeSort: [{ field: 'dueDate', order: 'asc' }],
 		});
 		expect(ref.value.currentView).toBe('calendar');
 		expect(ref.value.activeSection).toBe('done');

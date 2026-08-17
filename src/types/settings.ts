@@ -27,7 +27,7 @@ export const ACCENT_COLORS: readonly AccentColor[] = [
 	'blue', 'lavender',
 ] as const;
 
-import type { TaskSearchFilter, TaskSortOption } from './task';
+import type { TaskSearchFilter, TaskSortConfig } from './task';
 import type { WebhookSettings } from './webhook';
 
 export interface SavedFilterView {
@@ -37,7 +37,7 @@ export interface SavedFilterView {
 	view: TodoView;
 	section: string;
 	filter: TaskSearchFilter;
-	sort?: TaskSortOption;
+	sort?: TaskSortConfig;
 	/**
 	 * @deprecated 旧结构字段，仅用于迁移时读取。新代码请使用 `filter.tags`。
 	 */

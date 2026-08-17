@@ -68,7 +68,7 @@ afterEach(() => {
 });
 
 describe('EisenhowerView deadline ordering', () => {
-	it('renders each quadrant from latest deadline to earliest with undated tasks last', async () => {
+	it('renders each quadrant from earliest deadline to latest with undated tasks last', async () => {
 		const root = await mountView([
 			makeTask({ id: 'undated', title: '无截止时间' }),
 			makeTask({ id: 'early', title: '较早截止', dueEnd: 100 }),
@@ -76,6 +76,6 @@ describe('EisenhowerView deadline ordering', () => {
 		]);
 
 		const cards = root.querySelectorAll('.quadrant:first-of-type .mock-task-card');
-		expect(Array.from(cards).map((card) => card.textContent)).toEqual(['较晚截止', '较早截止', '无截止时间']);
+		expect(Array.from(cards).map((card) => card.textContent)).toEqual(['较早截止', '较晚截止', '无截止时间']);
 	});
 });

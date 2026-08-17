@@ -1,7 +1,8 @@
 import type { StickyNoteSource, StickyTaskGroup, StickyTaskItem } from '../types/stickyNote';
-import type { Task, TaskPriority, TaskStatus } from '../types/task';
+import type { Task, TaskPriority, TaskSortInput, TaskStatus } from '../types/task';
 import { getTaskStart } from '../types/task';
-import { searchAndSortTasks } from './searchService';
+import { DEFAULT_TASK_SORT_CONFIG } from './filterUtils';
+import { searchAndSortTasks, sortTasks } from './searchService';
 
 const statusOrder: TaskStatus[] = ['todo', 'doing', 'done'];
 const statusLabels: Record<TaskStatus, string> = {
@@ -22,7 +23,7 @@ interface StickyProjectionContext {
 	childrenByParentId: Map<string, Task[]>;
 }
 
-const createStickyProjectionContext = (tasks: Task[]): StickyProjectionContext => {
+const createStickyProjectionContext = (tasks: Task[], sort: TaskSortInput): StickyProjectionContext => {
 	const taskById = new Map(tasks.map((task) => [task.id, task]));
 	const childrenByParentId = new Map<string, Task[]>();
 
@@ -30,7 +31,7 @@ const createStickyProjectionContext = (tasks: Task[]): StickyProjectionContext =
 		if (!task.parentTaskId) continue;
 		const children = childrenByParentId.get(task.parentTaskId) ?? [];
 		children.push(task);
-		childrenByParentId.set(task.parentTaskId, children);
+		childrenByParentId.set(task.parentTaskId, sortTasks(children, sort));
 	}
 
 	return { taskById, childrenByParentId };
@@ -145,11 +146,9 @@ const buildCalendarGroups = (tasks: Task[], context: StickyProjectionContext): S
 };
 
 export const buildStickyTaskGroups = (tasks: Task[], source: StickyNoteSource): StickyTaskGroup[] => {
-	const sort = source.view === 'eisenhower'
-		? { field: 'dueDate' as const, order: 'desc' as const }
-		: source.sort;
+	const sort = source.sort ?? DEFAULT_TASK_SORT_CONFIG;
 	const filtered = searchAndSortTasks(tasks, source.filter, sort);
-	const context = createStickyProjectionContext(tasks);
+	const context = createStickyProjectionContext(tasks, sort);
 	switch (source.view) {
 		case 'kanban':
 			return buildKanbanGroups(filtered, context);

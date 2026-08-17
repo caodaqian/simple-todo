@@ -52,14 +52,14 @@ describe('buildStickyTaskGroups', () => {
 
 		expect(groups).toHaveLength(1);
 		expect(groups[0]!.title).toBe('便签');
-		expect(groups[0]!.tasks.map((item) => item.task.id)).toEqual(['parent', 'child-done', 'child-todo', 'orphan']);
+		expect(groups[0]!.tasks.map((item) => item.task.id)).toEqual(['parent', 'child-todo', 'child-done', 'orphan']);
 
 		const parent = groups[0]!.tasks[0]!;
 		expect(parent.subtaskTotal).toBe(2);
 		expect(parent.subtaskCompleted).toBe(1);
 		expect(parent.depth).toBe(0);
 		expect(parent.parentTitle).toBeUndefined();
-		expect(parent.children.map((item) => item.task.id)).toEqual(['child-done', 'child-todo']);
+		expect(parent.children.map((item) => item.task.id)).toEqual(['child-todo', 'child-done']);
 
 		const child = groups[0]!.tasks[1]!;
 		expect(child.subtaskTotal).toBe(0);
@@ -108,17 +108,17 @@ describe('buildStickyTaskGroups', () => {
 		expect(groups.map((group) => group.tasks.length)).toEqual([1, 1, 1, 1]);
 	});
 
-	it('sorts eisenhower groups by deadline regardless of source sort', () => {
+	it('uses source sort inside eisenhower groups', () => {
 		const groups = buildStickyTaskGroups([
 			makeTask({ id: 'undated', priority: 'urgent', createdAt: 1 }),
 			makeTask({ id: 'early', priority: 'urgent', dueEnd: 100, createdAt: 2 }),
 			makeTask({ id: 'late', priority: 'urgent', dueEnd: 500, createdAt: 3 }),
 		], makeSource({
 			view: 'eisenhower',
-			sort: { field: 'createdAt', order: 'asc' },
+			sort: [{ field: 'createdAt', order: 'asc' }],
 		}));
 
-		expect(groups[0]!.tasks.map((item) => item.task.id)).toEqual(['late', 'early', 'undated']);
+		expect(groups[0]!.tasks.map((item) => item.task.id)).toEqual(['undated', 'early', 'late']);
 	});
 
 	it('groups calendar tasks by due date', () => {
@@ -135,7 +135,7 @@ describe('buildStickyTaskGroups', () => {
 			makeTask({ id: 'low', priority: 'low', tags: ['work'] }),
 			makeTask({ id: 'urgent', priority: 'urgent', tags: ['work'] }),
 			makeTask({ id: 'hidden', priority: 'high', tags: ['life'] }),
-		], makeSource({ filter: { tags: ['work'] }, sort: { field: 'priority', order: 'desc' } }));
+		], makeSource({ filter: { tags: ['work'] }, sort: [{ field: 'priority', order: 'desc' }] }));
 
 		expect(groups[0]!.tasks.map((item) => item.task.id)).toEqual(['urgent', 'low']);
 	});

@@ -2,7 +2,7 @@ import { ref, type Ref } from 'vue';
 import type { TodoView } from '../types/settings';
 import type { SideSection, UiState } from '../types/uiState';
 import { DEFAULT_UI_STATE } from '../types/uiState';
-import { parseTaskSearchFilter, parseTaskSortOption } from './filterUtils';
+import { parseTaskSearchFilter, parseTaskSortConfig } from './filterUtils';
 import { STORAGE_KEYS } from './storageKeys';
 
 interface UtoolsDbStorage {
@@ -33,6 +33,12 @@ const isSideSection = (value: unknown): value is SideSection => {
 	return false;
 };
 
+const cloneUiState = (state: UiState): UiState => ({
+	...state,
+	activeFilter: { ...state.activeFilter },
+	activeSort: state.activeSort.map((rule) => ({ ...rule })),
+});
+
 const parseUiState = (raw: string): UiState => {
 	try {
 		const parsed: unknown = JSON.parse(raw);
@@ -46,7 +52,7 @@ const parseUiState = (raw: string): UiState => {
 				? parsed.activeSection
 				: DEFAULT_UI_STATE.activeSection,
 			activeFilter: parseTaskSearchFilter(parsed.activeFilter),
-			activeSort: parseTaskSortOption(parsed.activeSort),
+			activeSort: parseTaskSortConfig(parsed.activeSort),
 		};
 	} catch {
 		return { ...DEFAULT_UI_STATE };
@@ -74,16 +80,16 @@ class UiStateService {
 		const raw = this.readFromStorage();
 
 		if (raw === null) {
-			return { ...this.memoryUiState };
+			return cloneUiState(this.memoryUiState);
 		}
 
 		const state = parseUiState(raw);
 		this.memoryUiState = state;
-		return { ...state };
+		return cloneUiState(state);
 	}
 
 	saveUiState(state: UiState): void {
-		const nextState: UiState = { ...state };
+		const nextState = cloneUiState(state);
 		this.memoryUiState = nextState;
 		this.uiStateRef.value = nextState;
 

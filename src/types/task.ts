@@ -181,14 +181,24 @@ export interface TaskSearchFilter {
 	archived?: boolean;
 }
 
-export type TaskSortField = 'priority' | 'dueDate' | 'createdAt' | 'updatedAt';
+export type TaskSortField = 'priority' | 'dueDate' | 'status' | 'group' | 'tags' | 'createdAt' | 'updatedAt';
 
 export type TaskSortOrder = 'asc' | 'desc';
 
+export interface TaskSortRule {
+	field: TaskSortField;
+	order: TaskSortOrder;
+}
+
+export type TaskSortConfig = TaskSortRule[];
+
+/** @deprecated 旧版单字段排序格式，仅用于存储迁移边界。 */
 export interface TaskSortOption {
 	field: TaskSortField;
 	order?: TaskSortOrder;
 }
+
+export type TaskSortInput = TaskSortConfig | TaskSortOption;
 
 /**
  * 任务的起始时间戳。

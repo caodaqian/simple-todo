@@ -11,13 +11,15 @@ import ViewToolbar from '../../components/ViewToolbar.vue';
 import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
 import { useTaskQuickActions } from '../../composables/useTaskQuickActions';
 import { buildCalendarRangeSegments } from '../../services/calendarViewProjection';
+import { DEFAULT_TASK_SORT_CONFIG } from '../../services/filterUtils';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
-import type { CreateTaskInput, Task, TaskSearchFilter } from '../../types/task';
+import type { CreateTaskInput, Task, TaskSearchFilter, TaskSortConfig } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
     filter?: TaskSearchFilter;
+    sort?: TaskSortConfig;
   }>();
 
   const emit = defineEmits<{ (e: 'refresh'): void }>();
@@ -42,7 +44,7 @@ import type { CreateTaskInput, Task, TaskSearchFilter } from '../../types/task';
 
   const filteredTasks = computed(() =>
     taskService.getTasksInParentOrder(
-      searchAndSortTasks(props.tasks, { ...props.filter }, { field: 'dueDate', order: 'asc' }),
+      searchAndSortTasks(props.tasks, { ...props.filter }, props.sort ?? DEFAULT_TASK_SORT_CONFIG),
     ),
   );
 

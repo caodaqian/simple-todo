@@ -7,7 +7,8 @@ import type {
 	TaskOverview,
 	TaskPriority,
 	TaskSearchFilter,
-	TaskSortOption,
+	TaskSortInput,
+	TaskSortRule,
 	TaskStatus,
 } from '../types/task';
 import { getTaskDeadline, getTaskEnd, getTaskStart } from '../types/task';
@@ -18,6 +19,12 @@ const PRIORITY_RANK: Record<TaskPriority, number> = {
 	medium: 2,
 	high: 3,
 	urgent: 4,
+};
+
+const STATUS_RANK: Record<TaskStatus, number> = {
+	todo: 1,
+	doing: 2,
+	done: 3,
 };
 
 const DEFAULT_TAG_MATCH_MODE: TagMatchMode = 'any';
@@ -162,15 +169,40 @@ const compareDueDate = (left: Task, right: Task, order: 'asc' | 'desc'): number 
 	return order === 'desc' ? rightDueDate - leftDueDate : leftDueDate - rightDueDate;
 };
 
-const compareBySortOption = (left: Task, right: Task, option: TaskSortOption): number => {
-	const order = option.order ?? 'asc';
+const compareText = (left: string, right: string, order: 'asc' | 'desc'): number => {
+	const compared = left.localeCompare(right, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+	return order === 'desc' ? -compared : compared;
+};
+
+const getFirstTag = (task: Task): string | undefined => {
+	const tags = [...new Set(task.tags.map((tag) => normalizeText(tag)).filter(Boolean))].sort((left, right) =>
+		left.localeCompare(right, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }),
+	);
+	return tags[0];
+};
+
+const compareNullableText = (left: string | undefined, right: string | undefined, order: 'asc' | 'desc'): number => {
+	if (left === undefined && right === undefined) return 0;
+	if (left === undefined) return 1;
+	if (right === undefined) return -1;
+	return compareText(left, right, order);
+};
+
+const compareBySortRule = (left: Task, right: Task, rule: TaskSortRule): number => {
+	const order = rule.order;
 	const direction = order === 'desc' ? -1 : 1;
 
-	switch (option.field) {
+	switch (rule.field) {
 		case 'priority':
 			return (PRIORITY_RANK[left.priority] - PRIORITY_RANK[right.priority]) * direction;
 		case 'dueDate':
 			return compareDueDate(left, right, order);
+		case 'status':
+			return (STATUS_RANK[left.status] - STATUS_RANK[right.status]) * direction;
+		case 'group':
+			return compareNullableText(normalizeText(left.group) || undefined, normalizeText(right.group) || undefined, order);
+		case 'tags':
+			return compareNullableText(getFirstTag(left), getFirstTag(right), order);
 		case 'createdAt':
 			return (left.createdAt - right.createdAt) * direction;
 		case 'updatedAt':
@@ -178,6 +210,19 @@ const compareBySortOption = (left: Task, right: Task, option: TaskSortOption): n
 		default:
 			return 0;
 	}
+};
+
+const normalizeSortInput = (sortInput: TaskSortInput): TaskSortRule[] => {
+	if (Array.isArray(sortInput)) return sortInput;
+	return [{ field: sortInput.field, order: sortInput.order ?? 'asc' }];
+};
+
+const compareBySortRules = (left: Task, right: Task, sortInput: TaskSortInput): number => {
+	for (const rule of normalizeSortInput(sortInput)) {
+		const compared = compareBySortRule(left, right, rule);
+		if (compared !== 0) return compared;
+	}
+	return 0;
 };
 
 export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[] => {
@@ -253,15 +298,15 @@ export const filterTasks = (tasks: Task[], filter: TaskSearchFilter = {}): Task[
 	});
 };
 
-export const sortTasks = (tasks: Task[], sortOption?: TaskSortOption): Task[] => {
-	if (!sortOption) {
+export const sortTasks = (tasks: Task[], sortInput?: TaskSortInput): Task[] => {
+	if (!sortInput) {
 		return [...tasks];
 	}
 
 	return tasks
 		.map((task, index) => ({ task, index }))
 		.sort((left, right) => {
-			const compared = compareBySortOption(left.task, right.task, sortOption);
+			const compared = compareBySortRules(left.task, right.task, sortInput);
 			if (compared !== 0) {
 				return compared;
 			}
@@ -274,10 +319,10 @@ export const sortTasks = (tasks: Task[], sortOption?: TaskSortOption): Task[] =>
 export const searchAndSortTasks = (
 	tasks: Task[],
 	filter: TaskSearchFilter = {},
-	sortOption?: TaskSortOption,
+	sortInput?: TaskSortInput,
 ): Task[] => {
 	const filtered = filterTasks(tasks, filter);
-	return sortTasks(filtered, sortOption);
+	return sortTasks(filtered, sortInput);
 };
 
 const countValues = (values: string[]): CountedValue[] => {

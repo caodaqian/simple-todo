@@ -11,21 +11,21 @@ import ViewToolbar from '../../components/ViewToolbar.vue';
 import { useImeGuard } from '../../composables/useImeGuard';
 import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
 import { useTaskQuickActions } from '../../composables/useTaskQuickActions';
+import { DEFAULT_TASK_SORT_CONFIG } from '../../services/filterUtils';
 import { buildCompletedListRows } from '../../services/listViewProjection';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
 import { taskWorkflowService } from '../../services/taskWorkflowService';
-import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField, TaskSortOption, TaskStatus } from '../../types/task';
+import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortConfig, TaskStatus } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
     filter?: TaskSearchFilter;
-    sort?: TaskSortOption;
+    sort?: TaskSortConfig;
   }>();
 
   const emit = defineEmits<{
     (e: 'refresh'): void;
-    (e: 'update:sort', value: TaskSortOption): void;
   }>();
 
   const editorVisible = ref(false);
@@ -38,25 +38,6 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
   const batchGroup = ref('');
   const batchGroupImeGuard = useImeGuard();
 
-  const sortOptions: Array<{ label: string; value: TaskSortField }> = [
-    { label: '优先级', value: 'priority' },
-    { label: '截止时间', value: 'dueDate' },
-    { label: '创建时间', value: 'createdAt' },
-    { label: '更新时间', value: 'updatedAt' },
-  ];
-
-  const defaultSortOrder: Record<TaskSortField, 'asc' | 'desc'> = {
-    priority: 'desc',
-    dueDate: 'asc',
-    createdAt: 'desc',
-    updatedAt: 'desc',
-  };
-
-  const sortField = computed<TaskSortField>({
-    get: () => (props.sort ? props.sort.field : 'updatedAt'),
-    set: (value) => emit('update:sort', { field: value, order: defaultSortOrder[value] }),
-  });
-
   const priorityOptions: Array<{ label: string; value: TaskPriority }> = [
     { label: '低', value: 'low' },
     { label: '中', value: 'medium' },
@@ -64,9 +45,7 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
     { label: '紧急', value: 'urgent' },
   ];
 
-  const effectiveSort = computed<TaskSortOption>(() =>
-    props.sort ?? { field: 'updatedAt', order: defaultSortOrder.updatedAt },
-  );
+  const effectiveSort = computed<TaskSortConfig>(() => props.sort ?? DEFAULT_TASK_SORT_CONFIG);
 
   const sortedVisibleTasks = computed(() =>
     searchAndSortTasks(
@@ -233,10 +212,6 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
         <SmartTaskInput @create="handleQuickCreate" />
       </template>
       <template #actions>
-        <select v-model="sortField" class="sort-select" aria-label="排序方式">
-          <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-        </select>
-        <span class="toolbar-divider" />
         <button type="button" class="btn btn-ghost" :class="{ active: batchMode }"
           @click="batchMode ? exitBatchMode() : enterBatchMode()">
           <AppIcon name="checkCircle2" :size="14" />
@@ -362,19 +337,6 @@ import type { SaveTaskInput, Task, TaskPriority, TaskSearchFilter, TaskSortField
     flex-direction: column;
     gap: var(--space-3);
     min-height: 0;
-  }
-
-  /* Sort select inside the unified toolbar */
-  .sort-select {
-    height: 32px;
-    min-width: 110px;
-    padding: 0 var(--space-3);
-    font-size: var(--text-sm);
-    background: var(--color-bg-input);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-sm);
-    color: var(--color-text-primary);
-    cursor: pointer;
   }
 
   /* Active state for the batch toggle (.btn-ghost.active) inside the toolbar */

@@ -5,6 +5,7 @@ import FilterToolbar from '../../components/FilterToolbar.vue';
 import PomodoroStatusPill from '../../components/PomodoroStatusPill.vue';
 import SavedViewDialog from '../../components/SavedViewDialog.vue';
 import SettingsPanel from '../../components/SettingsPanel.vue';
+import SortToolbar from '../../components/SortToolbar.vue';
 import TaskEditor from '../../components/TaskEditor.vue';
 import TaskReviewPanel from '../../components/TaskReviewPanel.vue';
 import TemplateLibraryPanel from '../../components/TemplateLibraryPanel.vue';
@@ -33,7 +34,7 @@ import { openStickyNoteWindow } from '../../services/stickyWindowService';
 import { taskService } from '../../services/taskService';
 import { uiStateService } from '../../services/uiStateService';
 import type { AppSettings, SavedFilterView, TodoView } from '../../types/settings';
-import type { Task, TaskPriority, TaskSearchFilter, TaskSortOption, TaskStatus } from '../../types/task';
+import type { Task, TaskPriority, TaskSearchFilter, TaskSortConfig, TaskStatus } from '../../types/task';
 import type { SideSection } from '../../types/uiState';
 import CalendarView from '../CalendarView/index.vue';
 import EisenhowerView from '../EisenhowerView/index.vue';
@@ -60,8 +61,8 @@ import ListView from '../ListView/index.vue';
 
   // 视图筛选条件——所有视图共享同一份；切换视图保留筛选；保存视图按需快照
   const activeFilter = ref<TaskSearchFilter>(persistedUiState.activeFilter);
-  // 视图排序——list/kanban 接收此 prop；eisenhower/calendar 内部硬编码，忽略此 ref
-  const activeSort = ref<TaskSortOption>(persistedUiState.activeSort);
+  // 视图排序——所有主视图共享此配置，视图内部保留各自语义分组
+  const activeSort = ref<TaskSortConfig>(persistedUiState.activeSort);
 
   const filterToolbarRef = ref<{ focusKeywordSearch: () => void } | null>(null);
 
@@ -81,7 +82,7 @@ import ListView from '../ListView/index.vue';
         currentView: currentView.value,
         activeSection: activeSection.value,
         activeFilter: { ...activeFilter.value },
-        activeSort: { ...activeSort.value },
+        activeSort: activeSort.value.map((rule) => ({ ...rule })),
       });
     },
     { deep: true },
@@ -170,7 +171,7 @@ import ListView from '../ListView/index.vue';
   const handleSavedViewSave = (payload: {
     name: string;
     filter: TaskSearchFilter;
-    sort: TaskSortOption;
+    sort: TaskSortConfig;
   }): void => {
     settingsService.saveView(payload.name, {
       view: currentView.value,
@@ -187,7 +188,7 @@ import ListView from '../ListView/index.vue';
     activeSection.value = view.section as SideSection;
     activeFilter.value = { ...view.filter };
     if (view.sort) {
-      activeSort.value = { ...view.sort };
+      activeSort.value = view.sort.map((rule) => ({ ...rule }));
     }
   };
 
@@ -212,7 +213,7 @@ import ListView from '../ListView/index.vue';
       view: currentView.value,
       section: activeSection.value,
       filter: { ...currentFilter.value },
-      sort: { ...activeSort.value },
+      sort: activeSort.value.map((rule) => ({ ...rule })),
     }));
     if (!result.ok) handleStickyOpenFailure(result.reason);
   };
@@ -371,7 +372,7 @@ import ListView from '../ListView/index.vue';
     currentView.value = restored.currentView;
     activeSection.value = restored.activeSection;
     activeFilter.value = { ...restored.activeFilter };
-    activeSort.value = { ...restored.activeSort };
+    activeSort.value = restored.activeSort.map((rule) => ({ ...rule }));
   };
 
   /* ── Settings ─────────────────────────────────────────────────── */
@@ -603,6 +604,8 @@ ref="filterToolbarRef"
           @reset="resetActiveFilter"
         />
 
+        <SortToolbar v-model="activeSort" />
+
         <div class="new-task-split">
           <button class="btn-primary hub-add-btn" @click="openNewTask">
             <AppIcon name="plus" :size="16" />
@@ -639,18 +642,18 @@ ref="filterToolbarRef"
           v-if="currentView === 'list'"
           :tasks="tasks"
           :filter="currentFilter"
-          v-model:sort="activeSort"
+          :sort="activeSort"
           @refresh="loadTasks"
         />
         <KanbanView
           v-else-if="currentView === 'kanban'"
           :tasks="tasks"
           :filter="currentFilter"
-          v-model:sort="activeSort"
+          :sort="activeSort"
           @refresh="loadTasks"
         />
-        <EisenhowerView v-else-if="currentView === 'eisenhower'" :tasks="tasks" :filter="currentFilter" @refresh="loadTasks" />
-        <CalendarView v-else :tasks="tasks" :filter="currentFilter" @refresh="loadTasks" />
+        <EisenhowerView v-else-if="currentView === 'eisenhower'" :tasks="tasks" :filter="currentFilter" :sort="activeSort" @refresh="loadTasks" />
+        <CalendarView v-else :tasks="tasks" :filter="currentFilter" :sort="activeSort" @refresh="loadTasks" />
       </div>
     </main>
 

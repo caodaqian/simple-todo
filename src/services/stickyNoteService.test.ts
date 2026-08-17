@@ -40,7 +40,7 @@ describe('stickyNoteService', () => {
 			view: 'kanban',
 			section: 'today',
 			filter: { status: ['todo', 'doing'], tags: ['work'], overdueOnly: true },
-			sort: { field: 'priority', order: 'desc' },
+			sort: [{ field: 'priority', order: 'desc' }],
 		});
 
 		stickyNoteService.saveSource(source);
@@ -50,7 +50,7 @@ describe('stickyNoteService', () => {
 		expect(restored.view).toBe('kanban');
 		expect(restored.filter.tags).toEqual(['work']);
 		expect(restored.filter.overdueOnly).toBe(true);
-		expect(restored.sort).toEqual({ field: 'priority', order: 'desc' });
+		expect(restored.sort).toEqual([{ field: 'priority', order: 'desc' }]);
 	});
 
 	it('深拷贝筛选日期规则，避免修改便签源时污染原筛选', () => {
@@ -89,7 +89,7 @@ describe('stickyNoteService', () => {
 			view: 'kanban',
 			section: 'tag:frontend',
 			filter: { tags: ['frontend'] },
-			sort: { field: 'updatedAt', order: 'desc' },
+			sort: [{ field: 'updatedAt', order: 'desc' }],
 		};
 
 		const source = stickyNoteService.buildSourceFromSaved(savedView);

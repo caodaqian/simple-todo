@@ -8,19 +8,19 @@ import TaskEditor from '../../components/TaskEditor.vue';
 import TaskQuickActions from '../../components/TaskQuickActions.vue';
 import ViewToolbar from '../../components/ViewToolbar.vue';
 import { useTaskQuickActions } from '../../composables/useTaskQuickActions';
+import { DEFAULT_TASK_SORT_CONFIG } from '../../services/filterUtils';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
-import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOption, TaskStatus } from '../../types/task';
+import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortConfig, TaskStatus } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
     filter?: TaskSearchFilter;
-    sort?: TaskSortOption;
+    sort?: TaskSortConfig;
   }>();
 
   const emit = defineEmits<{
     (e: 'refresh'): void;
-    (e: 'update:sort', value: TaskSortOption): void;
   }>();
 
   const editorVisible = ref(false);
@@ -35,27 +35,9 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOpti
     done: { label: '已完成', color: 'var(--color-status-done)' },
   };
 
-  const defaultSortOrder: Record<TaskSortField, 'asc' | 'desc'> = {
-    priority: 'desc', dueDate: 'asc', createdAt: 'desc', updatedAt: 'desc',
-  };
-
-  const sortOptions: Array<{ label: string; value: TaskSortField }> = [
-    { label: '优先级', value: 'priority' },
-    { label: '截止时间', value: 'dueDate' },
-    { label: '创建时间', value: 'createdAt' },
-    { label: '更新时间', value: 'updatedAt' },
-  ];
-
-  const sortField = computed<TaskSortField>({
-    get: () => (props.sort ? props.sort.field : 'updatedAt'),
-    set: (value) => emit('update:sort', { field: value, order: defaultSortOrder[value] }),
-  });
-
   const reloadTasks = (): void => { /* no-op: tasks come from props */ };
 
-  const effectiveSort = computed<TaskSortOption>(() =>
-    props.sort ?? { field: 'updatedAt', order: defaultSortOrder.updatedAt },
-  );
+  const effectiveSort = computed<TaskSortConfig>(() => props.sort ?? DEFAULT_TASK_SORT_CONFIG);
 
   const filteredTasks = computed(() =>
     taskService.getTasksInParentOrder(
@@ -160,9 +142,6 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOpti
         <SmartTaskInput @create="handleQuickCreate" />
       </template>
       <template #actions>
-        <select v-model="sortField" class="sort-select" aria-label="排序方式">
-          <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-        </select>
       </template>
     </ViewToolbar>
 
@@ -210,18 +189,6 @@ import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortField, TaskSortOpti
     gap: var(--space-3);
     height: 100%;
     box-sizing: border-box;
-  }
-
-  .sort-select {
-    height: 32px;
-    min-width: 110px;
-    padding: 0 var(--space-3);
-    font-size: var(--text-sm);
-    background: var(--color-bg-input);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-sm);
-    color: var(--color-text-primary);
-    cursor: pointer;
   }
 
   /* Board */

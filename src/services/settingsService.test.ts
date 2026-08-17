@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, type SavedFilterView, type TodoView } from '../types/settings';
-import type { TaskSearchFilter, TaskSortOption } from '../types/task';
+import type { TaskSearchFilter, TaskSortConfig } from '../types/task';
 import { settingsService } from './settingsService';
 
 class MockDbStorage {
@@ -34,10 +34,10 @@ const createFilter = (overrides: Partial<TaskSearchFilter> = {}): TaskSearchFilt
 	...overrides,
 });
 
-const createSort = (field: TaskSortOption['field'], order: TaskSortOption['order'] = 'desc'): TaskSortOption => ({
+const createSort = (field: TaskSortConfig[number]['field'], order: TaskSortConfig[number]['order'] = 'desc'): TaskSortConfig => [{
 	field,
 	order,
-});
+}];
 
 describe('settingsService', () => {
 	const dbStorage = new MockDbStorage();
@@ -390,7 +390,7 @@ describe('settingsService', () => {
 		expect(settingsService.getViews()).toHaveLength(1);
 	});
 
-	it('filters out invalid savedViews during migration', () => {
+	it('filters invalid savedViews and normalizes invalid sort config', () => {
 		const valid: SavedFilterView = {
 			id: 'view-1',
 			name: '有效视图',
@@ -411,8 +411,13 @@ describe('settingsService', () => {
 		dbStorage.setItem('jianyue.settings', JSON.stringify({ ...DEFAULT_SETTINGS, savedViews: [valid, ...invalidItems] }));
 
 		const settings = settingsService.getSettings();
-		expect(settings.savedViews).toHaveLength(1);
+		expect(settings.savedViews).toHaveLength(2);
 		expect(settings.savedViews[0]).toEqual(valid);
+		expect(settings.savedViews[1]?.sort).toEqual([
+			{ field: 'priority', order: 'desc' },
+			{ field: 'dueDate', order: 'asc' },
+			{ field: 'status', order: 'asc' },
+		]);
 	});
 
 	it('persists view changes across service instances (via storage)', () => {

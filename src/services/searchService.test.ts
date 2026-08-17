@@ -197,4 +197,39 @@ describe('sort by deadline uses getTaskDeadline', () => {
 
 		expect(result.map((task) => task.id)).toEqual(['task-1']);
 	});
+
+	it('compares multiple rules in order and preserves stable input order', () => {
+		const tasks = [
+			createTask({ id: 'same-first', priority: 'high', dueEnd: 200, status: 'todo' }),
+			createTask({ id: 'second-rule', priority: 'high', dueEnd: 100, status: 'doing' }),
+			createTask({ id: 'third-rule', priority: 'high', dueEnd: 100, status: 'todo' }),
+			createTask({ id: 'first-rule', priority: 'urgent', dueEnd: 500, status: 'done' }),
+		];
+
+		const result = searchAndSortTasks(tasks, { showCompleted: true }, [
+			{ field: 'priority', order: 'desc' },
+			{ field: 'dueDate', order: 'asc' },
+			{ field: 'status', order: 'asc' },
+		]);
+
+		expect(result.map((task) => task.id)).toEqual([
+			'first-rule',
+			'third-rule',
+			'second-rule',
+			'same-first',
+		]);
+	});
+
+	it('sorts group and tags alphabetically with empty values last', () => {
+		const tasks = [
+			createTask({ id: 'empty', group: '', tags: [] }),
+			createTask({ id: 'beta', group: 'Beta', tags: ['z', 'Alpha'] }),
+			createTask({ id: 'alpha', group: 'Alpha', tags: ['Beta'] }),
+		];
+
+		expect(searchAndSortTasks(tasks, {}, [{ field: 'group', order: 'asc' }]).map((task) => task.id))
+			.toEqual(['alpha', 'beta', 'empty']);
+		expect(searchAndSortTasks(tasks, {}, [{ field: 'tags', order: 'asc' }]).map((task) => task.id))
+			.toEqual(['beta', 'alpha', 'empty']);
+	});
 });

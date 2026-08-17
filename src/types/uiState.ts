@@ -1,5 +1,5 @@
 import type { TodoView } from './settings';
-import type { TaskSearchFilter, TaskSortOption } from './task';
+import type { TaskSearchFilter, TaskSortConfig } from './task';
 
 /**
  * 侧边栏分区标识。仅用于侧边栏高亮，不再派生 filter。
@@ -19,13 +19,17 @@ export interface UiState {
 	activeSection: SideSection;
 	/** 当前筛选条件（所有视图共享同一份） */
 	activeFilter: TaskSearchFilter;
-	/** 当前排序（list/kanban 共享；eisenhower/calendar 忽略） */
-	activeSort: TaskSortOption;
+	/** 当前排序（所有主视图共享，视图内部保留各自分组语义） */
+	activeSort: TaskSortConfig;
 }
 
 export const DEFAULT_UI_STATE: UiState = {
 	currentView: 'list',
 	activeSection: 'inbox',
 	activeFilter: {},
-	activeSort: { field: 'updatedAt', order: 'desc' },
+	activeSort: [
+		{ field: 'priority', order: 'desc' },
+		{ field: 'dueDate', order: 'asc' },
+		{ field: 'status', order: 'asc' },
+	],
 };

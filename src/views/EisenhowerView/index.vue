@@ -10,13 +10,15 @@ import TaskQuickActions from '../../components/TaskQuickActions.vue';
 import ViewToolbar from '../../components/ViewToolbar.vue';
 import { useTaskHierarchy } from '../../composables/useTaskHierarchy';
 import { useTaskQuickActions } from '../../composables/useTaskQuickActions';
+import { DEFAULT_TASK_SORT_CONFIG } from '../../services/filterUtils';
 import { searchAndSortTasks } from '../../services/searchService';
 import { taskService } from '../../services/taskService';
-import type { SaveTaskInput, Task, TaskSearchFilter } from '../../types/task';
+import type { SaveTaskInput, Task, TaskSearchFilter, TaskSortConfig } from '../../types/task';
 
   const props = defineProps<{
     tasks: Task[];
     filter?: TaskSearchFilter;
+    sort?: TaskSortConfig;
   }>();
 
   const emit = defineEmits<{ (e: 'refresh'): void }>();
@@ -47,7 +49,7 @@ import type { SaveTaskInput, Task, TaskSearchFilter } from '../../types/task';
       searchAndSortTasks(
         props.tasks,
         { ...props.filter },
-        { field: 'dueDate', order: 'desc' },
+        props.sort ?? DEFAULT_TASK_SORT_CONFIG,
       ),
     ),
   );

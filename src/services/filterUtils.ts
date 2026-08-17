@@ -6,9 +6,11 @@ import type {
 	TaskDateRules,
 	TaskPriority,
 	TaskSearchFilter,
+	TaskSortConfig,
 	TaskSortField,
 	TaskSortOption,
 	TaskSortOrder,
+	TaskSortRule,
 	TaskStatus,
 } from '../types/task';
 import type { SideSection } from '../types/uiState';
@@ -30,7 +32,14 @@ export const TASK_DATE_RULE_PRESETS: ReadonlyArray<TaskDateRulePreset> = [
 	'custom',
 ];
 
-/** 默认排序：与 TodoHub 初始 activeSort 一致。 */
+/** 默认排序：优先级 → 截止日期 → 状态。 */
+export const DEFAULT_TASK_SORT_CONFIG: TaskSortConfig = [
+	{ field: 'priority', order: 'desc' },
+	{ field: 'dueDate', order: 'asc' },
+	{ field: 'status', order: 'asc' },
+];
+
+/** 旧版默认排序，供旧 API 读取时保持兼容。 */
 export const DEFAULT_TASK_SORT_OPTION: TaskSortOption = { field: 'updatedAt', order: 'desc' };
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> => {
@@ -65,7 +74,13 @@ export const parseTaskDateRule = (value: unknown): TaskDateRule | undefined => {
 };
 
 export const isTodoSortField = (value: unknown): value is TaskSortField =>
-	value === 'priority' || value === 'dueDate' || value === 'createdAt' || value === 'updatedAt';
+	value === 'priority'
+	|| value === 'dueDate'
+	|| value === 'status'
+	|| value === 'group'
+	|| value === 'tags'
+	|| value === 'createdAt'
+	|| value === 'updatedAt';
 
 export const isTodoSortOrder = (value: unknown): value is TaskSortOrder =>
 	value === 'asc' || value === 'desc';
@@ -120,6 +135,45 @@ export const isSortOption = (value: unknown): value is TaskSortOption => {
 	if (!isTodoSortField(value.field)) return false;
 	if (value.order !== undefined && !isTodoSortOrder(value.order)) return false;
 	return true;
+};
+
+export const isSortRule = (value: unknown): value is TaskSortRule => {
+	if (!isObjectRecord(value) || !isTodoSortField(value.field)) return false;
+	return isTodoSortOrder(value.order);
+};
+
+export const isSortConfig = (value: unknown): value is TaskSortConfig => {
+	if (!Array.isArray(value) || value.length === 0 || value.length > 3) return false;
+	const fields = new Set<string>();
+	return value.every((rule) => {
+		if (!isSortRule(rule) || fields.has(rule.field)) return false;
+		fields.add(rule.field);
+		return true;
+	});
+};
+
+const DEFAULT_SORT_ORDER: Record<TaskSortField, TaskSortOrder> = {
+	priority: 'desc',
+	dueDate: 'asc',
+	status: 'asc',
+	group: 'asc',
+	tags: 'asc',
+	createdAt: 'desc',
+	updatedAt: 'desc',
+};
+
+const cloneSortConfig = (config: TaskSortConfig): TaskSortConfig => config.map((rule) => ({ ...rule }));
+
+/** 解析新数组格式或旧单对象格式；非法值回退到默认排序。 */
+export const parseTaskSortConfig = (value: unknown): TaskSortConfig => {
+	if (isSortConfig(value)) return cloneSortConfig(value);
+	if (isSortOption(value)) {
+		return [{
+			field: value.field,
+			order: value.order ?? DEFAULT_SORT_ORDER[value.field],
+		}];
+	}
+	return cloneSortConfig(DEFAULT_TASK_SORT_CONFIG);
 };
 
 /**

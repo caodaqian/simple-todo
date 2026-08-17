@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { TodoView } from '../types/settings';
-import type { TaskSearchFilter, TaskSortOption } from '../types/task';
+import type { TaskSearchFilter, TaskSortConfig } from '../types/task';
 import AppIcon from './AppIcon.vue';
 import FilterPanel from './FilterPanel.vue';
 
@@ -10,14 +10,14 @@ const props = defineProps<{
 	view: TodoView;
 	initialName: string;
 	initialFilter: TaskSearchFilter;
-	initialSort: TaskSortOption;
+	initialSort: TaskSortConfig;
 	availableTags?: string[];
 	availableGroups?: string[];
 }>();
 
 const emit = defineEmits<{
 	(event: 'update:modelValue', value: boolean): void;
-	(event: 'save', payload: { name: string; filter: TaskSearchFilter; sort: TaskSortOption }): void;
+	(event: 'save', payload: { name: string; filter: TaskSearchFilter; sort: TaskSortConfig }): void;
 }>();
 
 const viewLabels: Record<TodoView, string> = {
@@ -30,7 +30,7 @@ const viewLabels: Record<TodoView, string> = {
 const nameInputRef = ref<HTMLInputElement | null>(null);
 const nameDraft = ref('');
 const filterDraft = ref<TaskSearchFilter>({});
-const sortDraft = ref<TaskSortOption>({ field: 'dueDate' });
+const sortDraft = ref<TaskSortConfig>([]);
 
 const cloneFilter = (filter: TaskSearchFilter): TaskSearchFilter => ({
 	...filter,
@@ -45,10 +45,12 @@ const cloneFilter = (filter: TaskSearchFilter): TaskSearchFilter => ({
 	}),
 });
 
+const cloneSort = (sort: TaskSortConfig): TaskSortConfig => sort.map((rule) => ({ ...rule }));
+
 const resetDraft = async (): Promise<void> => {
 	nameDraft.value = props.initialName;
 	filterDraft.value = cloneFilter(props.initialFilter);
-	sortDraft.value = { ...props.initialSort };
+	sortDraft.value = cloneSort(props.initialSort);
 	await nextTick();
 	nameInputRef.value?.focus();
 };
@@ -63,7 +65,7 @@ const save = (): void => {
 	emit('save', {
 		name,
 		filter: cloneFilter(filterDraft.value),
-		sort: { ...sortDraft.value },
+		sort: cloneSort(sortDraft.value),
 	});
 	close();
 };

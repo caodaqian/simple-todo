@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp, nextTick } from 'vue';
 import type { TodoView } from '../types/settings';
-import type { TaskSearchFilter, TaskSortOption } from '../types/task';
+import type { TaskSearchFilter, TaskSortConfig } from '../types/task';
 import SavedViewDialog from './SavedViewDialog.vue';
 
 const unmounts: Array<() => void> = [];
@@ -9,7 +9,7 @@ const unmounts: Array<() => void> = [];
 interface DialogMount {
 	root: HTMLElement;
 	updates: boolean[];
-	saves: Array<{ name: string; filter: TaskSearchFilter; sort: TaskSortOption }>;
+	saves: Array<{ name: string; filter: TaskSearchFilter; sort: TaskSortConfig }>;
 }
 
 const buttonByText = (container: ParentNode, text: string): HTMLButtonElement | undefined =>
@@ -22,14 +22,14 @@ const mountDialog = async (overrides: Partial<{
 	view: TodoView;
 	initialName: string;
 	initialFilter: TaskSearchFilter;
-	initialSort: TaskSortOption;
+	initialSort: TaskSortConfig;
 	availableTags: string[];
 	availableGroups: string[];
 }> = {}): Promise<DialogMount> => {
 	const root = document.createElement('div');
 	document.body.append(root);
 	const updates: boolean[] = [];
-	const saves: Array<{ name: string; filter: TaskSearchFilter; sort: TaskSortOption }> = [];
+	const saves: Array<{ name: string; filter: TaskSearchFilter; sort: TaskSortConfig }> = [];
 	const app = createApp(SavedViewDialog, {
 		modelValue: true,
 		view: 'list' as TodoView,
@@ -40,12 +40,12 @@ const mountDialog = async (overrides: Partial<{
 			tags: ['产品'],
 			dateRange: { start: new Date(2026, 6, 1).getTime(), end: new Date(2026, 6, 31, 23, 59, 59, 999).getTime() },
 		},
-		initialSort: { field: 'dueDate', order: 'asc' },
+		initialSort: [{ field: 'dueDate', order: 'asc' }],
 		availableTags: ['产品', '发布'],
 		availableGroups: ['工作', '生活'],
 		...overrides,
 		'onUpdate:modelValue': (value: boolean) => updates.push(value),
-		onSave: (payload: { name: string; filter: TaskSearchFilter; sort: TaskSortOption }) => saves.push(payload),
+		onSave: (payload: { name: string; filter: TaskSearchFilter; sort: TaskSortConfig }) => saves.push(payload),
 	});
 	app.mount(root);
 	unmounts.push(() => {
@@ -70,7 +70,7 @@ describe('SavedViewDialog', () => {
 			tags: ['产品'],
 			dateRange: { start: 100, end: 200 },
 		};
-		const initialSort: TaskSortOption = { field: 'dueDate', order: 'asc' };
+		const initialSort: TaskSortConfig = [{ field: 'dueDate', order: 'asc' }];
 		await mountDialog({ initialFilter, initialSort });
 
 		const nameInput = document.body.querySelector<HTMLInputElement>('input[name="saved-view-name"]');
@@ -86,7 +86,7 @@ describe('SavedViewDialog', () => {
 			tags: ['产品'],
 			dateRange: { start: 100, end: 200 },
 		});
-		expect(initialSort).toEqual({ field: 'dueDate', order: 'asc' });
+		expect(initialSort).toEqual([{ field: 'dueDate', order: 'asc' }]);
 	});
 
 	it('编辑分组、状态和标签只更新内部草稿，保存时输出组合筛选', async () => {
@@ -113,7 +113,7 @@ describe('SavedViewDialog', () => {
 				group: '工作',
 				dateRange: { start: new Date(2026, 6, 1).getTime(), end: new Date(2026, 6, 31, 23, 59, 59, 999).getTime() },
 			},
-			sort: { field: 'dueDate', order: 'asc' },
+			sort: [{ field: 'dueDate', order: 'asc' }],
 		}]);
 		expect(updates).toEqual([false]);
 	});

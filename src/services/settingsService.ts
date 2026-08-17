@@ -21,7 +21,7 @@ import type {
 	WebhookSettings,
 	WebhookTargetSettings,
 } from '../types/webhook';
-import { isSortOption, isTaskSearchFilter } from './filterUtils';
+import { isTaskSearchFilter, parseTaskSortConfig } from './filterUtils';
 import { STORAGE_KEYS } from './storageKeys';
 
 interface UtoolsDbStorage {
@@ -103,7 +103,14 @@ const createDefaultSettings = (): NormalizedAppSettings => ({
 
 const cloneSettings = (settings: NormalizedAppSettings): NormalizedAppSettings => ({
 	...settings,
-	savedViews: [...settings.savedViews],
+	savedViews: settings.savedViews.map((view) => ({
+		...view,
+		filter: {
+			...view.filter,
+			...(view.filter.tags === undefined ? {} : { tags: [...view.filter.tags] }),
+		},
+		...(view.sort === undefined ? {} : { sort: view.sort.map((rule) => ({ ...rule })) }),
+	})),
 	webhooks: cloneWebhookSettings(settings.webhooks),
 });
 
@@ -234,7 +241,7 @@ const parseSavedFilterView = (value: unknown): SavedFilterView | null => {
 	if (!isTodoView(view)) return null;
 	if (typeof section !== 'string') return null;
 	if (!isTaskSearchFilter(filter)) return null;
-	if (value.sort !== undefined && !isSortOption(value.sort)) return null;
+	const sort = value.sort === undefined ? undefined : parseTaskSortConfig(value.sort);
 
 	return {
 		id,
@@ -243,7 +250,7 @@ const parseSavedFilterView = (value: unknown): SavedFilterView | null => {
 		view,
 		section,
 		filter,
-		...(value.sort !== undefined ? { sort: value.sort } : {}),
+		...(sort !== undefined ? { sort } : {}),
 	};
 };
 

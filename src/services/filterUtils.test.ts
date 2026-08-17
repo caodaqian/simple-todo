@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskDateRules, TaskSearchFilter } from '../types/task';
 import {
+	DEFAULT_TASK_SORT_CONFIG,
 	getTaskDateRuleSummary,
 	isSidebarFilterActive,
 	isTaskDateRule,
 	parseTaskDateRule,
+	parseTaskSortConfig,
 	resolveTaskDateRule,
 	toggleSidebarFilter,
 } from './filterUtils';
@@ -151,5 +153,43 @@ describe('TaskDateRule', () => {
 		expect(parseTaskDateRule({ preset: 'unknown' })).toBeUndefined();
 		expect(getTaskDateRuleSummary({ preset: 'recent7Days' })).toBe('最近 7 天');
 		expect(getTaskDateRuleSummary({ preset: 'custom', startOffset: -2, endOffset: 3 })).toBe('自定义：-2 至 +3 天');
+	});
+});
+
+describe('TaskSortConfig', () => {
+	it('uses the three-field default ordering', () => {
+		expect(DEFAULT_TASK_SORT_CONFIG).toEqual([
+			{ field: 'priority', order: 'desc' },
+			{ field: 'dueDate', order: 'asc' },
+			{ field: 'status', order: 'asc' },
+		]);
+		expect(parseTaskSortConfig(undefined)).toEqual(DEFAULT_TASK_SORT_CONFIG);
+	});
+
+	it('migrates a legacy single-field object to a normalized rule array', () => {
+		expect(parseTaskSortConfig({ field: 'priority', order: 'desc' })).toEqual([
+			{ field: 'priority', order: 'desc' },
+		]);
+		expect(parseTaskSortConfig({ field: 'group' })).toEqual([
+			{ field: 'group', order: 'asc' },
+		]);
+	});
+
+	it('accepts all user-facing fields and rejects malformed rule arrays', () => {
+		expect(parseTaskSortConfig([
+			{ field: 'group', order: 'desc' },
+			{ field: 'tags', order: 'asc' },
+			{ field: 'updatedAt', order: 'desc' },
+		])).toEqual([
+			{ field: 'group', order: 'desc' },
+			{ field: 'tags', order: 'asc' },
+			{ field: 'updatedAt', order: 'desc' },
+		]);
+		expect(parseTaskSortConfig([])).toEqual(DEFAULT_TASK_SORT_CONFIG);
+		expect(parseTaskSortConfig([
+			{ field: 'priority', order: 'desc' },
+			{ field: 'priority', order: 'asc' },
+		])).toEqual(DEFAULT_TASK_SORT_CONFIG);
+		expect(parseTaskSortConfig([{ field: 'unknown', order: 'asc' }])).toEqual(DEFAULT_TASK_SORT_CONFIG);
 	});
 });

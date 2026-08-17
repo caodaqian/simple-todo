@@ -1,4 +1,4 @@
-import { getTaskEnd, getTaskStart, type Task, type TaskPriority } from '../types/task';
+import { getTaskEnd, getTaskStart, type Task } from '../types/task';
 
 export type CalendarRangePosition = 'start' | 'middle' | 'end' | 'single';
 
@@ -12,13 +12,6 @@ export interface CalendarRangeSegment {
 	endLabel?: string;
 }
 
-const priorityRank: Record<TaskPriority, number> = {
-	urgent: 0,
-	high: 1,
-	medium: 2,
-	low: 3,
-};
-
 const toDateKey = (timestamp: number): string => {
 	const date = new Date(timestamp);
 	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -29,14 +22,6 @@ const formatTime = (timestamp: number): string => {
 	return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 };
 
-const compareTasks = (left: Task, right: Task): number => {
-	const priorityDifference = priorityRank[left.priority] - priorityRank[right.priority];
-	if (priorityDifference !== 0) return priorityDifference;
-	const startDifference = (getTaskStart(left) ?? 0) - (getTaskStart(right) ?? 0);
-	if (startDifference !== 0) return startDifference;
-	return left.title.localeCompare(right.title, 'zh-CN');
-};
-
 export const buildCalendarRangeSegments = (
 	tasks: Task[],
 	visibleDateKeys: string[],
@@ -44,7 +29,7 @@ export const buildCalendarRangeSegments = (
 	const segmentsByDate = new Map(visibleDateKeys.map((key) => [key, [] as CalendarRangeSegment[]]));
 	const indexedKeys = new Map(visibleDateKeys.map((key, index) => [key, index]));
 
-	for (const task of [...tasks].sort(compareTasks)) {
+	for (const task of tasks) {
 		const start = getTaskStart(task);
 		const end = getTaskEnd(task);
 		if (end === undefined) continue;
